@@ -314,23 +314,27 @@ header {
 .legend {
   display: flex;
   justify-content: center;
-  gap: 30px;
-  margin-top: 10px;
-  font-size: 0.9rem;
-  font-weight: 700;
+  align-items: center;
+  gap: 40px;
+  margin-top: 12px;
+  font-size: 1.35rem;
+  font-weight: 800;
   color: var(--esith-blue-dark);
 }
 
 .leg-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  letter-spacing: 0.4px;
 }
 
 .leg-box {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
 }
 
 .leg-red { background: var(--alert-red); }
