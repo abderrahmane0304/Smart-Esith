@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Smart ESITH - Affichage dynamique du programme du jour dans le hall de l'ESITH.">
+    <title>Smart ESITH - Hall</title>
+    <link rel="icon" type="image/png" href="/static/esith-couleur-600x315-cropped-2.png">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,700;0,900;1,400;1,600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/nouveau_hall.css?v=20261021_v11">
+</head>
+<body>
+    <!-- BACKGROUND EFFECTS -->
+    <div class="bg-glow bg-glow-left"></div>
+    <div class="bg-glow bg-glow-right"></div>
+    <div class="bg-dots"></div>
+
+    <div id="splash-screen" class="splash-screen">
+        <!-- Decorative Top Left Shapes -->
+        <div class="splash-decor-container">
+            <div class="decor-shape-1"></div>
+            <div class="decor-shape-2"></div>
+            <div class="decor-shape-3"></div>
+            <div class="decor-shape-4"></div>
+        </div>
+
+        <img src="/static/esith-couleur-600x315-cropped-2.png" alt="ESITH" class="splash-logo" onerror="this.style.display='none'" />
+        
+        <div class="splash-top-right">
+            <div class="pill">
+                <div class="pill-icon-circle blue-circle">
+                    <!-- Calendar SVG -->
+                    <svg viewBox="0 0 24 24" width="26" height="26" stroke="#0B4F6C" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                </div>
+                <div class="pill-content">
+                    <div id="splash-date" class="pill-title blue-text"></div>
+                    <div id="splash-time" class="pill-value green-text"></div>
+                </div>
+            </div>
+            
+            <div class="pill">
+                <div class="pill-icon-circle green-circle">
+                    <!-- Leaf SVG -->
+                    <svg viewBox="0 0 24 24" width="26" height="26" stroke="#c3d601" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path><path d="M2 22 12 12"></path></svg>
+                </div>
+                <div class="pill-content">
+                    <div class="pill-title blue-text">EMPREINTE CARBONE</div>
+                    <div class="carbon-flex">
+                        <div class="carbon-progress-bg"><div class="carbon-progress-fill" id="carbon-fill"></div></div>
+                        <div id="carbone-val" class="pill-value green-text">--%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="splash-center">
+            <div class="welcome-container">
+                <!-- Left Stylized Arrow -->
+                <svg class="welcome-arrow" viewBox="0 0 24 24" width="45" height="45" stroke="#c3d601" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4 L6 12 L16 20 M6 12 L22 12"/></svg>
+                <h2>BIENVENUE SUR</h2>
+                <!-- Right Stylized Arrow -->
+                <svg class="welcome-arrow" viewBox="0 0 24 24" width="45" height="45" stroke="#c3d601" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4 L18 12 L8 20 M18 12 L2 12"/></svg>
+            </div>
+            
+            <h1 class="main-title">
+                <span class="green-text">SMART</span> <span class="blue-text">ESITH</span>
+            </h1>
+            
+            <div class="title-underline">
+                <div class="title-line"></div>
+                <div class="title-dot"></div>
+                <div class="title-line"></div>
+            </div>
+
+            <p class="subtitle">Toute l'information de l'école, en un seul regard.</p>
+        </div>
+
+        <div class="splash-bottom-right">
+            <h3>By IMS</h3>
+            <p>Informatique et Management des Systèmes</p>
+        </div>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div id="main-content" style="display: none;">
+        <header>
+            <div class="logo-container">
+                <img src="/static/esith-couleur-600x315-cropped-2.png" alt="ESITH" class="logo-img" />
+            </div>
+            <div class="program-title">
+                <h1 id="current-cycle">PROGRAMME DU JOUR</h1>
+                <div id="date-banner" class="date-banner" style="display: none;"></div>
+                <div class="legend">
+                    <span class="leg-item"><span class="leg-box leg-red"></span> Cours annulé</span>
+                    <span class="leg-item"><span class="leg-box leg-orange"></span> Cours retardé</span>
+                    <span class="leg-item"><span class="leg-box leg-yellow leg-mauve leg-vert-fonce"></span> Salle modifiée</span>
+                </div>
+            </div>
+            <div class="date-time">
+                <div id="date-display" class="blue-text"></div>
+                <div id="time-display" class="blue-text"></div>
+            </div>
+        </header>
+
+        <main id="courses-container">
+            <div id="no-courses" style="display: none; text-align: center; font-size: 2.5rem; font-weight: 600; color: #176387; margin-top: 15vh;">
+                Aucune séance programmée.
+            </div>
+            <div id="year-columns" class="year-columns">
+                <div class="grid-header" id="grid-header"></div>
+                <div id="grid-body" class="grid-body"></div>
+            </div>
+        </main>
+
+        <footer>
+            <div class="event-ticker">
+                <marquee id="event-marquee" scrollamount="12">Chargement des événements...</marquee>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/js/nouveau_hall.js?v=20261021_v11"></script>
+</body>
+</html>

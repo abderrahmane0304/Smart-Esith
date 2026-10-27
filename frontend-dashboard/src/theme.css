@@ -1,0 +1,185 @@
+:root {
+  /* Primaires */
+  --esith-blue:              #176387;
+  --esith-blue-light:        #4f8fa8;
+  --esith-blue-dark:         #0B4F6C;
+  --esith-blue-login:        #01527a;
+
+  /* Accents */
+  --esith-pistachio:         #D4E24C;
+  --esith-pistachio-light:   #eef4b5;
+  --esith-pistachio-btn:     #c3d601;
+  --esith-pistachio-tab:     #cddd35;
+  --esith-pistachio-admin:   #004974;
+
+  /* États */
+  --alert-red:               #f23636;
+  --alert-orange:            #f38a22;
+  --alert-yellow:            #145a32;  /* Vert foncé pour changement de salle */
+  --alert-vert-fonce:        #145a32;  /* Vert foncé */
+  --alert-mauve:             #145a32;  /* Vert foncé */
+  --alert-green:             #198754;
+
+  /* Fonds */
+  --bg-main:                 #f4f8f7;
+  --bg-card:                 #ffffff;
+  --bg-dashboard:            #f4f7f9;
+  --bg-gradient:             linear-gradient(135deg, #eef4b5 0%, #e3f2fd 100%);
+
+  /* Ombres */
+  --shadow-card:             0 2px 8px rgba(0,0,0,0.1);
+  --shadow-modal:            0 10px 30px rgba(0,0,0,0.25);
+}
+
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Montserrat', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-dashboard);
+  color: var(--esith-blue-dark);
+  overflow-x: hidden;
+}
+
+.btn {
+  background-color: var(--esith-pistachio-btn);
+  color: var(--esith-blue-login);
+  border: none;
+  padding: 10px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.btn:hover {
+  background-color: var(--esith-pistachio);
+}
+
+.card {
+  background: var(--bg-card);
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-control {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.login-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 1rem;
+  background: var(--bg-gradient);
+  box-sizing: border-box;
+}
+
+.login-card {
+  background: white;
+  padding: clamp(24px, 5vw, 44px);
+  border-radius: 14px;
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.login-card h2 {
+  color: var(--esith-blue-login);
+  margin-bottom: 20px;
+}
+
+/* Layout */
+.layout-container {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 250px;
+  background-color: var(--esith-blue);
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  font-size: 1.2rem;
+  font-weight: bold;
+  background-color: var(--esith-blue-dark);
+  text-align: center;
+}
+
+.sidebar-menu {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar-menu li a {
+  display: block;
+  padding: 15px 20px;
+  color: white;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.sidebar-menu li a:hover {
+  background-color: var(--esith-blue-light);
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  background: white;
+  padding: 15px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.page-content {
+  padding: 20px;
+  flex: 1;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+th {
+  background-color: var(--esith-blue-light);
+  color: white;
+}
