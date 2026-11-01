@@ -89,7 +89,7 @@ function showMainContent() {
         splash.style.display = 'none';
     }
     if (main) {
-        main.style.display = 'block';
+        main.style.display = 'flex';
     }
 }
 
@@ -271,33 +271,30 @@ function buildPill(c, alertClass, salleContent) {
 
     const groupeStr = c.groupe || '';
     const gLen = groupeStr.length;
-    let fontSize = '2.25rem';
+    let modClass = 'mod-normal';
     if (gLen > 22) {
-        fontSize = '1.45rem';
+        modClass = 'mod-long';
     } else if (gLen > 11) {
-        fontSize = '1.75rem';
+        modClass = 'mod-medium';
     }
 
     // Calibrage adaptatif de la taille de police de la salle pour couvrir toute l'écriture
     const salleStr = c.salle || '';
-    let roomFontSize = '1.45rem';
-    let roomLineHeight = '1.2';
+    let roomClass = 'room-normal';
     if (salleStr.length > 22) {
-        roomFontSize = '0.98rem';
-        roomLineHeight = '1.15';
+        roomClass = 'room-long';
     } else if (salleStr.length > 13) {
-        roomFontSize = '1.2rem';
-        roomLineHeight = '1.18';
+        roomClass = 'room-medium';
     }
 
     div.innerHTML = `
-        <div class="course-time" style="font-size:1.18rem;font-weight:800;color:${textColor};opacity:0.95;margin-bottom:3px;letter-spacing:0.5px;">
+        <div class="course-time" style="color:${textColor};">
             ${esc(c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : '')))}
         </div>
-        <div class="course-module" style="font-size:${fontSize};font-weight:900;color:${textColor};line-height:1.12;white-space:normal;word-break:break-word;">
+        <div class="course-module ${modClass}" style="color:${textColor};">
             ${esc(groupeStr)}
         </div>
-        <div class="course-room" style="font-size:${roomFontSize};line-height:${roomLineHeight};font-weight:800;color:${textColor};margin-top:3px;white-space:normal;word-break:break-word;">
+        <div class="course-room ${roomClass}" style="color:${textColor};">
             ${salleContent}
         </div>
     `;
@@ -602,3 +599,39 @@ function renderCycle() {
 fetchData();
 setInterval(fetchData, REFRESH_MS);
 showSplashScreen();
+
+// ── Détection automatique de changement d'écran ou projection ──────────────────
+let resizeDebounce = null;
+function handleDisplayChange() {
+    clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+        updateClock();
+        if (!isShowingSplash && allData) {
+            renderCycle();
+        }
+    }, 150);
+}
+
+window.addEventListener('resize', handleDisplayChange);
+window.addEventListener('orientationchange', handleDisplayChange);
+document.addEventListener('fullscreenchange', handleDisplayChange);
+
+// Raccourci projection : double-clic ou touche F pour basculer en plein écran
+document.addEventListener('dblclick', () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen().catch(() => {});
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+            document.exitFullscreen().catch(() => {});
+        }
+    }
+});
+
