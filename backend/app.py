@@ -190,6 +190,45 @@ def today_str():
     return datetime.datetime.now().strftime('%d/%m/%Y')
 
 
+def cleanup_expired_records(db=None):
+    """Supprime les enregistrements expirés :
+    - Événements passés depuis plus de 2 semaines (14 jours)
+    - Absences, retards et changements de salle antérieurs à aujourd'hui
+    """
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+
+    today = datetime.date.today()
+    events_cutoff = today - datetime.timedelta(days=14)
+    deleted_events = 0
+    deleted_alerts = 0
+
+    try:
+        for e in db.query(Event).all():
+            d = parse_date(e.date)
+            if d is not None and d < events_cutoff:
+                db.delete(e)
+                deleted_events += 1
+
+        for model in (Absence, Retard, ChangementSalle):
+            for rec in db.query(model).all():
+                d = parse_date(rec.date)
+                if d is not None and d < today:
+                    db.delete(rec)
+                    deleted_alerts += 1
+
+        if deleted_events or deleted_alerts:
+            db.commit()
+            print(f"[Smart ESITH] Nettoyage auto : {deleted_events} événement(s) (>14j) et {deleted_alerts} alerte(s)/salle(s) expirée(s) supprimé(s).")
+    except Exception as e:
+        db.rollback()
+        print("[Smart ESITH] Nettoyage automatique ignoré :", e)
+    finally:
+        if own_session:
+            db.close()
+
+
 def detect_cycle(code_module, text_content):
     code_module = str(code_module).upper() if pd.notna(code_module) else ""
     text_content = str(text_content).upper() if pd.notna(text_content) else ""
@@ -422,6 +461,7 @@ def fmt_h(hd, hf):
 @app.route('/api/hall/all_data', methods=['GET'])
 def get_all_data():
     db = get_db()
+    cleanup_expired_records(db)
     display_date, is_today = resolve_display_date(db)
 
     cours = db.query(Cours).filter_by(date=display_date).all()
@@ -431,9 +471,10 @@ def get_all_data():
     formations = db.query(Formation).filter_by(actif=True).all()
     cours_re = db.query(Cours).filter_by(Cycle=CYCLE_RE).all()
     
-    absences = db.query(Absence).filter_by(date=display_date, actif=True).all()
-    retards = db.query(Retard).filter_by(date=display_date, actif=True).all()
-    changements = db.query(ChangementSalle).filter_by(date=display_date, actif=True).all()
+    today = today_str()
+    absences = db.query(Absence).filter_by(date=today, actif=True).all()
+    retards = db.query(Retard).filter_by(date=today, actif=True).all()
+    changements = db.query(ChangementSalle).filter_by(date=today, actif=True).all()
 
     # Événements : tous les événements actifs à venir (date >= aujourd'hui)
     t = datetime.date.today()
@@ -745,6 +786,7 @@ def import_events(current_user):
             db.add(Event(titre=titre, date=date, heure_debut=normalize_time(pick(row, 'HEURE', 'HEURE_DEBUT', 'HD')), lieu=pick(row, 'LIEU')))
             imported += 1
         db.commit()
+        cleanup_expired_records(db)
         log_action(db, current_user, "Import événements CSV", f"{imported} événement(s) importé(s), {ignored} ignorée(s)")
     except Exception as e:
         db.rollback()
@@ -783,6 +825,7 @@ def import_absences(current_user):
             else:
                 ignored += 1
         db.commit()
+        cleanup_expired_records(db)
         log_action(db, current_user, "Import absences/retards CSV", f"{imported} absence(s)/retard(s) importé(s), {ignored} ignorée(s)")
     except Exception as e:
         db.rollback()
@@ -876,6 +919,7 @@ def event_to_dict(e):
 @app.route('/api/events', methods=['GET'])
 def list_events():
     db = get_db()
+    cleanup_expired_records(db)
     events = db.query(Event).filter_by(actif=True).all()
     events.sort(key=lambda e: (parse_date(e.date) or datetime.date.max, clean(e.heure_debut)))
     return jsonify([event_to_dict(e) for e in events])
@@ -895,6 +939,7 @@ def create_event(current_user):
     e = Event(titre=titre, date=date, heure_debut=normalize_time(data.get('heure_debut')), lieu=clean(data.get('lieu')))
     db.add(e)
     db.commit()
+    cleanup_expired_records(db)
     log_action(db, current_user, "Création événement", f"ID {e.id}: {titre} ({date})")
     return jsonify({"success": True, "id": e.id})
 
@@ -942,8 +987,8 @@ def declare_retard_absence(current_user):
     if not groupe or typ not in ('ABSENCE', 'RETARD'):
         return jsonify({"error": "Type (ABSENCE/RETARD) et groupe obligatoires"}), 400
     db = get_db()
-    display_date, _ = resolve_display_date(db)
-    date_val = normalize_date(data.get('date')) if data.get('date') else display_date
+    cleanup_expired_records(db)
+    date_val = normalize_date(data.get('date')) if data.get('date') else today_str()
     heure = normalize_time(data.get('heure')) or clean(data.get('heure'))
     prof = clean(data.get('prof'))
     if typ == 'ABSENCE':
@@ -968,15 +1013,16 @@ def changement_salle(current_user):
         return jsonify({"error": "Groupe et nouvelle salle obligatoires"}), 400
 
     db = get_db()
-    display_date, _ = resolve_display_date(db)
+    cleanup_expired_records(db)
+    today = today_str()
     now = datetime.datetime.now().strftime('%H:%M')
-    db.add(ChangementSalle(groupe=groupe, ancienne_salle=ancienne, nouvelle_salle=nouvelle, date=display_date, heure_creation=now))
+    db.add(ChangementSalle(groupe=groupe, ancienne_salle=ancienne, nouvelle_salle=nouvelle, date=today, heure_creation=now))
 
-    # Met à jour la salle des séances concernées (comparaison insensible à la casse/espaces)
+    # Met à jour la salle des séances concernées du jour (comparaison insensible à la casse/espaces)
     def key(s):
         return re.sub(r'\s+', '', clean(s)).lower()
     updated = 0
-    courses = db.query(Cours).filter_by(date=display_date).all()
+    courses = db.query(Cours).filter_by(date=today).all()
     for row in courses:
         row_groupes = [clean(g) for g in (row.groupe or '').split() if clean(g)]
         if clean(row.groupe) == groupe or groupe in row_groupes:
@@ -989,13 +1035,18 @@ def changement_salle(current_user):
     return jsonify({"success": True, "seances_modifiees": updated})
 
 
+def _active_for_date(db, model):
+    """Nettoie les anciennes déclarations et retourne uniquement celles du jour (ou de la date demandée)."""
+    cleanup_expired_records(db)
+    target_date = normalize_date(request.args['date']) if request.args.get('date') else today_str()
+    return db.query(model).filter_by(actif=True, date=target_date).all()
+
+
 @app.route('/api/absences', methods=['GET'])
 def get_absences():
     db = get_db()
-    q = db.query(Absence).filter_by(actif=True)
-    if request.args.get('date'):
-        q = q.filter_by(date=normalize_date(request.args['date']))
-    return jsonify([{"id": a.id, "groupe": clean(a.groupe), "prof": clean(a.prof), "date": clean(a.date), "heure": clean(a.heure), "motif": clean(a.motif)} for a in q.all()])
+    rows = _active_for_date(db, Absence)
+    return jsonify([{"id": a.id, "groupe": clean(a.groupe), "prof": clean(a.prof), "date": clean(a.date), "heure": clean(a.heure), "motif": clean(a.motif)} for a in rows])
 
 
 @app.route('/api/absences/<int:id>', methods=['DELETE'])
@@ -1015,10 +1066,8 @@ def delete_absence(current_user, id):
 @app.route('/api/retards', methods=['GET'])
 def get_retards():
     db = get_db()
-    q = db.query(Retard).filter_by(actif=True)
-    if request.args.get('date'):
-        q = q.filter_by(date=normalize_date(request.args['date']))
-    return jsonify([{"id": r.id, "groupe": clean(r.groupe), "prof": clean(r.prof), "date": clean(r.date), "heure_prevue": clean(r.heure_prevue), "duree_retard": clean(r.duree_retard)} for r in q.all()])
+    rows = _active_for_date(db, Retard)
+    return jsonify([{"id": r.id, "groupe": clean(r.groupe), "prof": clean(r.prof), "date": clean(r.date), "heure_prevue": clean(r.heure_prevue), "duree_retard": clean(r.duree_retard)} for r in rows])
 
 
 @app.route('/api/retards/<int:id>', methods=['DELETE'])
@@ -1038,10 +1087,8 @@ def delete_retard(current_user, id):
 @app.route('/api/changements-salle', methods=['GET'])
 def get_changements():
     db = get_db()
-    q = db.query(ChangementSalle).filter_by(actif=True)
-    if request.args.get('date'):
-        q = q.filter_by(date=normalize_date(request.args['date']))
-    return jsonify([{"id": c.id, "groupe": clean(c.groupe), "ancienne_salle": clean(c.ancienne_salle), "nouvelle_salle": clean(c.nouvelle_salle), "date": clean(c.date), "heure": clean(c.heure_creation)} for c in q.all()])
+    rows = _active_for_date(db, ChangementSalle)
+    return jsonify([{"id": c.id, "groupe": clean(c.groupe), "ancienne_salle": clean(c.ancienne_salle), "nouvelle_salle": clean(c.nouvelle_salle), "date": clean(c.date), "heure": clean(c.heure_creation)} for c in rows])
 
 
 @app.route('/api/changements-salle/<int:id>', methods=['DELETE'])
@@ -1136,6 +1183,7 @@ def normalize_existing_dates():
 # Initialize Database
 init_db()
 normalize_existing_dates()
+cleanup_expired_records()
 
 
 if __name__ == '__main__':

@@ -8,7 +8,7 @@
     <link rel="icon" type="image/png" href="/static/esith-couleur-600x315-cropped-2.png">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,700;0,900;1,400;1,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/nouveau_hall.css?v=20261105_v2">
+    <link rel="stylesheet" href="/static/css/nouveau_hall.css?v=20261111_v3">
 </head>
 <body>
     <!-- BACKGROUND EFFECTS -->
@@ -114,12 +114,14 @@
         </main>
 
         <footer>
-            <div class="event-ticker">
-                <marquee id="event-marquee" scrollamount="12">Chargement des événements...</marquee>
+            <div class="event-ticker" id="event-ticker">
+                <div id="event-marquee" class="ticker-track">
+                    <span class="ticker-chunk">Chargement des événements...</span>
+                </div>
             </div>
         </footer>
     </div>
 
-    <script src="/static/js/nouveau_hall.js?v=20261101_v1"></script>
+    <script src="/static/js/nouveau_hall.js?v=20261111_v2"></script>
 </body>
 </html>

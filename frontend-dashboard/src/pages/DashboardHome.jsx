@@ -594,8 +594,11 @@ const DashboardHome = () => {
                   <div className="dash-card p-4">
                     <div className="card-header-accent" style={{ backgroundColor: '#2c3e50' }}></div>
                     <div className="card-body">
-                      <div className="d-flex justify-content-between align-items-center mb-4">
-                        <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>Alertes & Déclarations en cours d'affichage</h5>
+                      <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+                        <div>
+                          <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>Alertes & Déclarations en cours d'affichage</h5>
+                          <small className="text-muted">Uniquement les déclarations du jour ({new Date().toLocaleDateString('fr-FR')})</small>
+                        </div>
                         <button type="button" className="btn btn-sm btn-outline-secondary" onClick={fetchAlertes}>
                           🔄 Rafraîchir
                         </button>

@@ -787,4 +787,36 @@ footer {
   letter-spacing: clamp(1px, 0.2vw, 3px);
   border-top: 3px solid var(--esith-blue-dark);
   box-sizing: border-box;
+  overflow: hidden;
+}
+
+.event-ticker {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+.ticker-track {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  width: max-content;
+  will-change: transform;
+  animation: tickerScroll var(--ticker-duration, 22s) linear infinite;
+}
+
+.ticker-chunk {
+  display: inline-block;
+  white-space: pre;
+}
+
+@keyframes tickerScroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
 }

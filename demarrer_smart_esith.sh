@@ -29,6 +29,75 @@ fi
 echo "=========================================================="
 echo ""
 
+# Fonction de détection et lancement du navigateur (détaché du terminal)
+launch_browser() {
+    local BROWSER_BIN=""
+    local BROWSER_TYPE=""
+
+    if command -v chromium-browser >/dev/null 2>&1; then
+        BROWSER_BIN="chromium-browser"
+        BROWSER_TYPE="chromium"
+    elif command -v chromium >/dev/null 2>&1; then
+        BROWSER_BIN="chromium"
+        BROWSER_TYPE="chromium"
+    elif command -v google-chrome >/dev/null 2>&1; then
+        BROWSER_BIN="google-chrome"
+        BROWSER_TYPE="chromium"
+    elif command -v firefox-esr >/dev/null 2>&1; then
+        BROWSER_BIN="firefox-esr"
+        BROWSER_TYPE="firefox"
+    elif command -v firefox >/dev/null 2>&1; then
+        BROWSER_BIN="firefox"
+        BROWSER_TYPE="firefox"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        BROWSER_BIN="xdg-open"
+        BROWSER_TYPE="xdg"
+    fi
+
+    if [ -z "$BROWSER_BIN" ]; then
+        echo "⚠️  Aucun navigateur détecté. Ouvrez manuellement $URL"
+        return
+    fi
+
+    # S'assurer que DISPLAY / WAYLAND_DISPLAY est défini si lancé en tâche de fond
+    if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+        export DISPLAY=:0
+    fi
+
+    local RUN_PREFIX=""
+    if command -v setsid >/dev/null 2>&1; then
+        RUN_PREFIX="setsid"
+    fi
+
+    if [ "$IS_KIOSK" -eq 1 ]; then
+        echo "📺 Démarrage en mode Kiosk plein écran ($BROWSER_BIN)..."
+        if [ "$BROWSER_TYPE" = "chromium" ]; then
+            local KIOSK_PROFILE="/tmp/smart_esith_kiosk_${USER:-pi}"
+            mkdir -p "$KIOSK_PROFILE" 2>/dev/null || true
+            $RUN_PREFIX nohup "$BROWSER_BIN" \
+                --kiosk \
+                --noerrdialogs \
+                --disable-infobars \
+                --no-first-run \
+                --disable-session-crashed-bubble \
+                --check-for-update-interval=31536000 \
+                --user-data-dir="$KIOSK_PROFILE" \
+                "$URL" >/dev/null 2>&1 </dev/null &
+        elif [ "$BROWSER_TYPE" = "firefox" ]; then
+            $RUN_PREFIX nohup "$BROWSER_BIN" --kiosk "$URL" >/dev/null 2>&1 </dev/null &
+        else
+            $RUN_PREFIX nohup "$BROWSER_BIN" "$URL" >/dev/null 2>&1 </dev/null &
+        fi
+    else
+        echo "🌐 Démarrage du navigateur ($BROWSER_BIN)..."
+        if [ "$BROWSER_TYPE" = "chromium" ]; then
+            $RUN_PREFIX nohup "$BROWSER_BIN" --app="$URL" >/dev/null 2>&1 </dev/null &
+        else
+            $RUN_PREFIX nohup "$BROWSER_BIN" "$URL" >/dev/null 2>&1 </dev/null &
+        fi
+    fi
+}
+
 # 1. Vérification de Python 3
 if ! command -v python3 >/dev/null 2>&1; then
     echo "❌ Erreur : Python 3 n'est pas installé !"
@@ -38,13 +107,22 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-# 2. Accès au dossier backend
+# 2. Vérifier si le serveur tourne déjà sur le port $PORT
+if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', $PORT)); s.close()" 2>/dev/null; then
+    echo "✅ Le serveur Smart ESITH est déjà actif sur $URL !"
+    launch_browser
+    sleep 2
+    exit 0
+fi
+
+# 3. Accès au dossier backend
 cd "$BACKEND_DIR" || {
     echo "❌ Erreur : Dossier backend introuvable à : $BACKEND_DIR"
+    read -p "Appuyez sur Entrée pour fermer..."
     exit 1
 }
 
-# 3. Création de l'environnement virtuel (venv) si inexistant
+# 4. Création de l'environnement virtuel (venv) si inexistant
 if [ ! -d "venv" ]; then
     echo "📦 Création de l'environnement virtuel (venv)..."
     python3 -m venv venv 2>/dev/null || {
@@ -56,15 +134,16 @@ if [ ! -d "venv" ]; then
     }
 fi
 
-# 4. Activation de l'environnement virtuel
+# 5. Activation de l'environnement virtuel
 if [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
 else
     echo "❌ venv/bin/activate introuvable."
+    read -p "Appuyez sur Entrée pour fermer..."
     exit 1
 fi
 
-# 5. Vérification rapide des dépendances (optimisée pour la rapidité au boot du Pi)
+# 6. Vérification rapide des dépendances (optimisée pour la rapidité au boot du Pi)
 echo "🔍 Vérification des dépendances Python..."
 if ! python -c "import flask, waitress, pandas, sqlalchemy, openpyxl, jwt" 2>/dev/null; then
     echo "📦 Installation / mise à jour des dépendances depuis requirements.txt..."
@@ -97,47 +176,22 @@ echo "=========================================================="
 echo "💡 Pour arrêter le serveur, fermez cette fenêtre ou faites Ctrl+C."
 echo ""
 
-# 6. Ouverture automatique du navigateur dès que le serveur écoute
+# 7. Ouverture automatique du navigateur dès que le serveur écoute
 (
-    # Attendre que le port soit actif (timeout 30s)
     for i in {1..30}; do
-        if python -c "import socket; s = socket.socket(); s.connect(('127.0.0.1', $PORT)); s.close()" 2>/dev/null; then
+        if python3 -c "import socket; s = socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', $PORT)); s.close()" 2>/dev/null; then
             break
         fi
         sleep 1
     done
-
-    # Détection du navigateur installé
-    BROWSER_BIN=""
-    if command -v chromium-browser >/dev/null 2>&1; then
-        BROWSER_BIN="chromium-browser"
-    elif command -v chromium >/dev/null 2>&1; then
-        BROWSER_BIN="chromium"
-    elif command -v firefox >/dev/null 2>&1; then
-        BROWSER_BIN="firefox"
-    elif command -v xdg-open >/dev/null 2>&1; then
-        BROWSER_BIN="xdg-open"
-    fi
-
-    if [ -n "$BROWSER_BIN" ]; then
-        if [ "$IS_KIOSK" -eq 1 ]; then
-            echo "📺 Démarrage de Chromium en mode Kiosk plein écran..."
-            $BROWSER_BIN --noerrdialogs \
-                         --disable-infobars \
-                         --check-for-update-interval=31536000 \
-                         --disable-session-crashed-bubble \
-                         --kiosk "$URL" >/dev/null 2>&1 &
-        else
-            echo "🌐 Démarrage du navigateur..."
-            if [ "$BROWSER_BIN" = "xdg-open" ]; then
-                xdg-open "$URL" >/dev/null 2>&1 &
-            else
-                $BROWSER_BIN --app="$URL" >/dev/null 2>&1 || $BROWSER_BIN "$URL" >/dev/null 2>&1 &
-            fi
-        fi
-    fi
+    launch_browser
 ) &
 
-# 7. Exécution de l'application Smart ESITH (Waitress en production)
-exec python app.py
-
+# 8. Exécution de l'application Smart ESITH (Waitress en production)
+python app.py
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "❌ Le serveur s'est arrêté avec une erreur (code $EXIT_CODE)."
+    read -p "Appuyez sur Entrée pour fermer..."
+fi

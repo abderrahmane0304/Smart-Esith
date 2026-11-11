@@ -36,7 +36,10 @@ if [ -n "$PID" ]; then
 fi
 
 # Fermeture optionnelle des fenêtres Chromium en mode Kiosk de Smart ESITH
-pkill -f "chromium.*5001" 2>/dev/null && echo "✅ Fenêtre d'affichage fermée."
+if pkill -f "smart_esith_kiosk" 2>/dev/null || pkill -f "chromium.*5001" 2>/dev/null; then
+    echo "✅ Fenêtre d'affichage fermée."
+    FOUND=1
+fi
 
 if [ $FOUND -eq 0 ]; then
     echo "ℹ️ Aucun processus Smart ESITH en cours d'exécution sur le port $PORT."

@@ -10,6 +10,7 @@ Ce guide explique comment installer et utiliser le **bouton de démarrage rapide
 | Fichier | Rôle |
 |---|---|
 | `demarrer_smart_esith.sh` | **Script principal** de démarrage (équivalent de `.bat`) |
+| `demarrer_smart_esith_kiosk.sh` | **Script dédié Kiosk TV** (plein écran sans barre d'URL pour le Hall) |
 | `installer_rpi.sh` | **Installeur 1-clic** qui crée les boutons avec icône sur votre Bureau |
 | `arreter_smart_esith.sh` | Script pour couper le serveur proprement en 1 clic |
 | `Smart_ESITH.desktop` | Fichier raccourci bureau Linux |

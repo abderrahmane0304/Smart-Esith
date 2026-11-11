@@ -55,6 +55,7 @@ Smart Esith v2/
 ├── frontend-dashboard/        # Dashboard React 19 + Vite/CRA
 ├── DEMARRER_SMART_ESITH.bat   # Démarrage rapide Windows
 ├── demarrer_smart_esith.sh    # Démarrage rapide Raspberry Pi 4
+├── demarrer_smart_esith_kiosk.sh # Démarrage mode Kiosk TV Raspberry Pi 4
 ├── installer_rpi.sh           # Installeur bouton Bureau Raspberry Pi 4
 ├── arreter_smart_esith.sh     # Arrêt propre Raspberry Pi 4
 ├── GUIDE_RASPBERRY_PI.md      # Guide complet d'utilisation Raspberry Pi 4

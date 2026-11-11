@@ -6,8 +6,13 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 LAUNCHER="$SCRIPT_DIR/demarrer_smart_esith.sh"
+KIOSK_LAUNCHER="$SCRIPT_DIR/demarrer_smart_esith_kiosk.sh"
 STOPPER="$SCRIPT_DIR/arreter_smart_esith.sh"
-ICON="$SCRIPT_DIR/backend/static/logo-esith.png"
+if [ -f "$SCRIPT_DIR/backend/static/logo-esith-header.png" ]; then
+    ICON="$SCRIPT_DIR/backend/static/logo-esith-header.png"
+else
+    ICON="$SCRIPT_DIR/backend/static/logo-esith.png"
+fi
 
 echo "=========================================================="
 echo "    🎓 SMART ESITH v2.0 - INSTALLATEUR RASPBERRY PI 4    "
@@ -18,6 +23,9 @@ echo ""
 # 1. Rendre exécutables les scripts du projet
 echo "🔧 [1/4] Configuration des permissions d'exécution..."
 chmod +x "$LAUNCHER" 2>/dev/null || true
+if [ -f "$KIOSK_LAUNCHER" ]; then
+    chmod +x "$KIOSK_LAUNCHER" 2>/dev/null || true
+fi
 if [ -f "$STOPPER" ]; then
     chmod +x "$STOPPER" 2>/dev/null || true
 fi
@@ -68,6 +76,18 @@ fi
 # 4. Création des boutons raccourcis (.desktop)
 echo "🎨 [4/4] Création des boutons de démarrage sur le Bureau..."
 
+quote_exec() {
+    if [[ "$1" == *" "* ]]; then
+        echo "\"$1\""
+    else
+        echo "$1"
+    fi
+}
+
+EXEC_STD="$(quote_exec "$LAUNCHER")"
+EXEC_KIOSK="$(quote_exec "$KIOSK_LAUNCHER")"
+EXEC_STOP="$(quote_exec "$STOPPER")"
+
 for DDIR in "${DESKTOP_DIRS[@]}"; do
     # Bouton 1 : Démarrage Standard
     FILE_STD="$DDIR/Smart_ESITH.desktop"
@@ -77,7 +97,7 @@ Version=1.0
 Type=Application
 Name=Smart ESITH
 Comment=Démarrer Smart ESITH (Serveur + Navigateur)
-Exec=$LAUNCHER
+Exec=$EXEC_STD
 Icon=$ICON
 Path=$SCRIPT_DIR
 Terminal=true
@@ -97,7 +117,7 @@ Version=1.0
 Type=Application
 Name=Smart ESITH (Kiosk TV)
 Comment=Démarrer Smart ESITH en mode plein écran TV pour le Hall
-Exec=$LAUNCHER --kiosk
+Exec=$EXEC_KIOSK
 Icon=$ICON
 Path=$SCRIPT_DIR
 Terminal=true
@@ -117,7 +137,7 @@ Version=1.0
 Type=Application
 Name=Arrêter Smart ESITH
 Comment=Arrêter le serveur Smart ESITH
-Exec=$STOPPER
+Exec=$EXEC_STOP
 Icon=$ICON
 Path=$SCRIPT_DIR
 Terminal=true

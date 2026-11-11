@@ -135,3 +135,63 @@ def test_access_matrix(client):
     assert isinstance(res_journal.get_json(), list)
     assert len(res_journal.get_json()) > 0  # Actions were logged above!
 
+
+def test_cleanup_expired_events_and_same_day_alerts(client):
+    from database import Event, Absence, Retard, ChangementSalle
+    today = datetime.date.today()
+    today_s = today.strftime('%d/%m/%Y')
+    old_event_s = (today - datetime.timedelta(days=15)).strftime('%d/%m/%Y')
+    recent_event_s = (today - datetime.timedelta(days=5)).strftime('%d/%m/%Y')
+    yesterday_s = (today - datetime.timedelta(days=1)).strftime('%d/%m/%Y')
+    tomorrow_s = (today + datetime.timedelta(days=1)).strftime('%d/%m/%Y')
+
+    db = SessionLocal()
+    created_ids = []
+    try:
+        ev_old = Event(titre="__TEST_OLD_EVENT__", date=old_event_s, heure_debut="10:00", lieu="Hall")
+        ev_recent = Event(titre="__TEST_RECENT_EVENT__", date=recent_event_s, heure_debut="10:00", lieu="Hall")
+        abs_old = Absence(prof="__TEST_OLD_ABS__", groupe="G1", date=yesterday_s, heure="08:30", motif="Old")
+        abs_today = Absence(prof="__TEST_TODAY_ABS__", groupe="G1", date=today_s, heure="08:30", motif="Today")
+        ret_old = Retard(prof="__TEST_OLD_RET__", groupe="G1", date=yesterday_s, heure_prevue="09:00", duree_retard="10m")
+        sal_old = ChangementSalle(groupe="__TEST_OLD_SALLE__", ancienne_salle="A1", nouvelle_salle="A2", date=yesterday_s, heure_creation="08:00")
+        sal_future = ChangementSalle(groupe="__TEST_FUT_SALLE__", ancienne_salle="A1", nouvelle_salle="A3", date=tomorrow_s, heure_creation="08:00")
+        db.add_all([ev_old, ev_recent, abs_old, abs_today, ret_old, sal_old, sal_future])
+        db.commit()
+        created_ids = [ev_old.id, ev_recent.id, abs_old.id, abs_today.id, ret_old.id, sal_old.id, sal_future.id]
+
+        # /api/events supprime les événements > 14 jours mais garde ceux < 14 jours
+        ev_res = client.get('/api/events')
+        assert ev_res.status_code == 200
+        titres = [e['titre'] for e in ev_res.get_json()]
+        assert "__TEST_OLD_EVENT__" not in titres
+        assert "__TEST_RECENT_EVENT__" in titres
+        assert db.query(Event).filter_by(id=created_ids[0]).first() is None
+
+        # /api/absences, /api/retards, /api/changements-salle suppriment < aujourd'hui et n'affichent que aujourd'hui
+        abs_res = client.get('/api/absences')
+        assert abs_res.status_code == 200
+        profs = [a['prof'] for a in abs_res.get_json()]
+        assert "__TEST_OLD_ABS__" not in profs
+        assert "__TEST_TODAY_ABS__" in profs
+        assert db.query(Absence).filter_by(id=created_ids[2]).first() is None
+
+        ret_res = client.get('/api/retards')
+        assert ret_res.status_code == 200
+        assert "__TEST_OLD_RET__" not in [r['prof'] for r in ret_res.get_json()]
+        assert db.query(Retard).filter_by(id=created_ids[4]).first() is None
+
+        sal_res = client.get('/api/changements-salle')
+        assert sal_res.status_code == 200
+        groupes_salle = [s['groupe'] for s in sal_res.get_json()]
+        assert "__TEST_OLD_SALLE__" not in groupes_salle
+        assert "__TEST_FUT_SALLE__" not in groupes_salle  # même jour uniquement
+        assert db.query(ChangementSalle).filter_by(id=created_ids[5]).first() is None
+    finally:
+        for model in (Event, Absence, Retard, ChangementSalle):
+            for obj in db.query(model).all():
+                val = getattr(obj, 'titre', None) or getattr(obj, 'prof', None) or getattr(obj, 'groupe', None)
+                if str(val).startswith("__TEST_"):
+                    db.delete(obj)
+        db.commit()
+        db.close()
+

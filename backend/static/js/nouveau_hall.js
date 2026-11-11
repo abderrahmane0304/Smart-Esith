@@ -18,6 +18,56 @@ let firstRenderDone = false;
 let isShowingSplash = true;
 let currentCycleTotalPages = 1;
 let rotationTimeout = null;
+let lastTickerRawText = '';
+
+function updateTickerDuration(track, containerW) {
+    const halfWidth = track.scrollWidth / 2;
+    if (halfWidth <= 0) return;
+    // Vitesse constante fluide (~135 px/s sur 1920px, proportionnelle à l'écran)
+    const pxPerSec = Math.max(95, (containerW || window.innerWidth || 1280) * 0.085);
+    const duration = Math.max(6, halfWidth / pxPerSec);
+    track.style.setProperty('--ticker-duration', `${duration.toFixed(2)}s`);
+}
+
+function renderEventTicker(rawText, forceRebuild = false) {
+    const ticker = document.getElementById('event-ticker');
+    const track = document.getElementById('event-marquee');
+    if (!ticker || !track) return;
+
+    const text = (rawText || '').trim();
+    if (!text) return;
+
+    const containerW = ticker.clientWidth || window.innerWidth || 1280;
+    if (!forceRebuild && text === lastTickerRawText && track.children.length === 2) {
+        updateTickerDuration(track, containerW);
+        return;
+    }
+    lastTickerRawText = text;
+
+    const unit = `${text}     ★     `;
+    const chunk1 = document.createElement('span');
+    chunk1.className = 'ticker-chunk';
+    chunk1.textContent = unit;
+
+    track.innerHTML = '';
+    track.appendChild(chunk1);
+
+    if (chunk1.offsetWidth > 0) {
+        let safety = 0;
+        while (chunk1.offsetWidth < containerW + 120 && safety < 24) {
+            chunk1.textContent += unit;
+            safety++;
+        }
+    } else {
+        const approxReps = Math.max(2, Math.min(12, Math.ceil((containerW + 120) / Math.max(120, unit.length * 14))));
+        chunk1.textContent = unit.repeat(approxReps);
+    }
+
+    const chunk2 = chunk1.cloneNode(true);
+    track.appendChild(chunk2);
+
+    updateTickerDuration(track, containerW);
+}
 
 // ── Sécurité & Encodage : échappe et nettoie le texte inséré dans le HTML ───
 function fixEncoding(str) {
@@ -90,6 +140,15 @@ function showMainContent() {
     }
     if (main) {
         main.style.display = 'flex';
+    }
+    if (lastTickerRawText) {
+        renderEventTicker(lastTickerRawText, true);
+    } else {
+        const footer = document.querySelector('footer');
+        const track = document.getElementById('event-marquee');
+        if (footer && footer.style.display !== 'none' && track && track.textContent.trim()) {
+            renderEventTicker(track.textContent.trim(), true);
+        }
     }
 }
 
@@ -185,10 +244,10 @@ async function fetchData() {
                 if (e.lieu) parts.push(String(e.lieu).toUpperCase());
                 return parts.join(' — ');
             }).join('     ★     ');
-            const marquee = document.getElementById('event-marquee');
-            if (marquee.innerText !== eventText) marquee.innerText = eventText;
             footer.style.display = 'block';
+            renderEventTicker(eventText);
         } else {
+            lastTickerRawText = '';
             footer.style.display = 'none';
         }
 
@@ -608,6 +667,9 @@ function handleDisplayChange() {
         updateClock();
         if (!isShowingSplash && allData) {
             renderCycle();
+        }
+        if (!isShowingSplash && lastTickerRawText) {
+            renderEventTicker(lastTickerRawText, true);
         }
     }, 150);
 }
