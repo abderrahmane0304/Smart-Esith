@@ -37,6 +37,10 @@ class Event(Base):
     date = Column(String, nullable=False)
     heure_debut = Column(String)
     lieu = Column(String)
+    media_path = Column(String)
+    media_type = Column(String)
+    mode_affichage = Column(String, default='rotation')
+    force_active = Column(Boolean, default=False)
     actif = Column(Boolean, default=True)
 
 class Absence(Base):

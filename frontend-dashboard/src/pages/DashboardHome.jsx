@@ -24,7 +24,9 @@ const DashboardHome = () => {
   // Forms states
   const [raData, setRaData] = useState({ type: 'ABSENCE', groupe: '', heure: '', motif: '', prof: '' });
   const [salleData, setSalleData] = useState({ groupe: '', ancienneSalle: '', nouvelleSalle: '' });
-  const [eventData, setEventData] = useState({ titre: '', date: '', heure_debut: '', lieu: '' });
+  const [eventData, setEventData] = useState({ titre: '', date: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false });
+  const [eventFile, setEventFile] = useState(null);
+  const eventFileInputRef = React.useRef(null);
   const [carbone, setCarbone] = useState(0);
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -191,9 +193,24 @@ const DashboardHome = () => {
   const handleEvent = async (e) => {
     e.preventDefault();
     try {
-      await apiClient.post('/events', eventData);
-      showNotification('Événement ajouté avec succès', 'success');
-      setEventData({ titre: '', date: '', heure_debut: '', lieu: '' });
+      const formData = new FormData();
+      formData.append('titre', eventData.titre);
+      formData.append('date', eventData.date);
+      formData.append('heure_debut', eventData.heure_debut || '');
+      formData.append('lieu', eventData.lieu || '');
+      formData.append('mode_affichage', eventData.mode_affichage || 'rotation');
+      formData.append('force_active', eventData.force_active ? 'true' : 'false');
+      if (eventFile) {
+        formData.append('file', eventFile);
+      }
+
+      await apiClient.post('/events', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      showNotification('Événement enregistré avec succès', 'success');
+      setEventData({ titre: '', date: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false });
+      setEventFile(null);
+      if (eventFileInputRef.current) eventFileInputRef.current.value = '';
       setEventListKey(prev => prev + 1); // Force EventList refresh
     } catch (err) {
       console.error(err);
@@ -680,22 +697,79 @@ const DashboardHome = () => {
               <div className="dash-card p-4 mb-4">
                 <div className="card-header-accent" style={{ backgroundColor: '#c3d601' }}></div>
                 <div className="card-body">
-                  <h5 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Créer un événement (Bandeau défilant)</h5>
+                  <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <h5 className="fw-bold mb-0" style={{ color: '#0B4F6C' }}>Créer un événement / Affiche d'accueil</h5>
+                    <span className="badge bg-light text-muted border">Bandeau défilant ou Fiche plein écran</span>
+                  </div>
                   <form onSubmit={handleEvent} className="row g-3 mb-4">
                     <div className="col-12 col-md-6">
-                      <input type="text" className="dash-input w-100" placeholder="Titre de l'événement" required value={eventData.titre} onChange={e=>setEventData({...eventData, titre: e.target.value})}/>
+                      <label className="form-label small fw-bold text-muted mb-1">Titre de l'événement *</label>
+                      <input type="text" className="dash-input w-100" placeholder="Ex: Cérémonie d'accueil des invités" required value={eventData.titre} onChange={e=>setEventData({...eventData, titre: e.target.value})}/>
                     </div>
                     <div className="col-12 col-sm-6 col-md-3">
+                      <label className="form-label small fw-bold text-muted mb-1">Date *</label>
                       <input type="date" className="dash-input w-100" required value={eventData.date} onChange={e=>setEventData({...eventData, date: e.target.value})}/>
                     </div>
                     <div className="col-12 col-sm-6 col-md-3">
+                      <label className="form-label small fw-bold text-muted mb-1">Heure de début (Optionnel)</label>
                       <input type="time" className="dash-input w-100" value={eventData.heure_debut} onChange={e=>setEventData({...eventData, heure_debut: e.target.value})}/>
                     </div>
-                    <div className="col-12 col-md-9">
-                      <input type="text" className="dash-input w-100" placeholder="Lieu (Optionnel)" value={eventData.lieu} onChange={e=>setEventData({...eventData, lieu: e.target.value})}/>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label small fw-bold text-muted mb-1">Lieu (Optionnel)</label>
+                      <input type="text" className="dash-input w-100" placeholder="Ex: Grand Amphi, Salle de Conférence..." value={eventData.lieu} onChange={e=>setEventData({...eventData, lieu: e.target.value})}/>
                     </div>
-                    <div className="col-12 col-md-3">
-                      <button type="submit" className="btn-premium w-100 py-2">Ajouter</button>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label small fw-bold text-muted mb-1">
+                        📄 Fiche d'événement / Affiche d'accueil (Image ou PDF)
+                      </label>
+                      <input
+                        ref={eventFileInputRef}
+                        type="file"
+                        className="dash-input w-100"
+                        accept="image/png,image/jpeg,image/webp,application/pdf"
+                        onChange={e => setEventFile(e.target.files[0] || null)}
+                      />
+                      <small className="text-muted d-block mt-1">Convertit automatiquement les PDF en image HD pour l'écran TV.</small>
+                    </div>
+
+                    {eventFile && (
+                      <>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small fw-bold text-muted mb-1">
+                            📺 Mode de diffusion sur l'écran du Hall
+                          </label>
+                          <select
+                            className="dash-input w-100"
+                            value={eventData.mode_affichage}
+                            onChange={e => setEventData({...eventData, mode_affichage: e.target.value})}
+                          >
+                            <option value="rotation">🔄 Dans la rotation (défile avec les cours)</option>
+                            <option value="fige">📌 Figé toute la journée (Accueil exclusif)</option>
+                          </select>
+                        </div>
+
+                        <div className="col-12 col-md-6 d-flex align-items-center">
+                          <div className="form-check p-2 bg-light rounded border w-100 mt-md-4">
+                            <input
+                              className="form-check-input ms-1 me-2"
+                              type="checkbox"
+                              id="forceActiveCheck"
+                              checked={eventData.force_active}
+                              onChange={e => setEventData({...eventData, force_active: e.target.checked})}
+                            />
+                            <label className="form-check-label small fw-semibold text-dark" htmlFor="forceActiveCheck">
+                              ⚡ Forcer l'affichage immédiat aujourd'hui (sans attendre le jour J)
+                            </label>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="col-12 text-end mt-4">
+                      <button type="submit" className="btn-premium px-4 py-2">
+                        {eventFile ? "Enregistrer l'événement & l'Affiche" : "Ajouter l'événement"}
+                      </button>
                     </div>
                   </form>
                 </div>

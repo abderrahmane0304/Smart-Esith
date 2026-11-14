@@ -235,3 +235,106 @@ def test_re_and_fc_follow_display_date(client):
         db.close()
 
 
+def test_event_poster_upload_and_modes(client):
+    from database import SessionLocal, Event
+    import io
+    from PIL import Image
+
+    # 1. Login as Admin
+    login_res = client.post('/api/auth/login', json={"username": "admin", "password": "admin2024"})
+    token = login_res.get_json()['token']
+    auth_header = {"Authorization": f"Bearer {token}"}
+
+    # Create dummy image
+    img_byte_arr = io.BytesIO()
+    img = Image.new('RGB', (800, 600), color=(11, 79, 108))
+    img.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+
+    event_id = None
+    created_file = None
+    try:
+        # Création d'événement avec affiche en mode 'fige' et force_active=True
+        data = {
+            'titre': '__TEST_CONFERENCE_ANNUELLE__',
+            'date': '15/12/2030',
+            'heure_debut': '09:00',
+            'lieu': 'Grand Amphi',
+            'mode_affichage': 'fige',
+            'force_active': 'true',
+            'file': (img_byte_arr, 'affiche_test.png')
+        }
+        res = client.post('/api/events', data=data, content_type='multipart/form-data', headers=auth_header)
+        assert res.status_code == 200, f"Error: {res.get_json()}"
+        res_data = res.get_json()
+        assert res_data['success'] is True
+        event_id = res_data['id']
+
+        # Vérification via GET /api/events
+        list_res = client.get('/api/events')
+        assert list_res.status_code == 200
+        found = [e for e in list_res.get_json() if e['id'] == event_id]
+        assert len(found) == 1
+        ev = found[0]
+        assert ev['mode_affichage'] == 'fige'
+        assert ev['force_active'] is True
+        assert ev['media_path'] is not None
+        assert ev['media_path'].startswith('/static/uploads/events/')
+        created_file = ev['media_path']
+
+        # Vérification via /api/hall/all_data
+        hall_res = client.get('/api/hall/all_data')
+        assert hall_res.status_code == 200
+        hall_data = hall_res.get_json()
+        poster = hall_data.get('event_poster')
+        assert poster is not None
+        assert poster['titre'] == '__TEST_CONFERENCE_ANNUELLE__'
+        assert poster['mode_affichage'] == 'fige'
+        assert poster['force_active'] is True
+
+        # Basculer en mode rotation
+        put_res = client.put(f'/api/events/{event_id}', json={'mode_affichage': 'rotation'}, headers=auth_header)
+        assert put_res.status_code == 200
+        hall_data2 = client.get('/api/hall/all_data').get_json()
+        assert hall_data2['event_poster']['mode_affichage'] == 'rotation'
+
+        # Test upload PDF
+        import fitz
+        pdf_doc = fitz.open()
+        pdf_page = pdf_doc.new_page(width=1920, height=1080)
+        pdf_page.insert_text(fitz.Point(100, 200), "TEST PDF ESITH", fontsize=36)
+        pdf_bytes = pdf_doc.tobytes()
+        pdf_doc.close()
+
+        pdf_data = {
+            'titre': '__TEST_PDF_EVENT__',
+            'date': '16/12/2030',
+            'file': (io.BytesIO(pdf_bytes), 'programme.pdf'),
+            'mode_affichage': 'rotation'
+        }
+        pdf_res = client.post('/api/events', data=pdf_data, content_type='multipart/form-data', headers=auth_header)
+        assert pdf_res.status_code == 200
+        pdf_res_data = pdf_res.get_json()
+        assert pdf_res_data['success'] is True
+        pdf_event_id = pdf_res_data['id']
+        pdf_ev = [e for e in client.get('/api/events').get_json() if e['id'] == pdf_event_id][0]
+        assert pdf_ev['media_type'] == 'pdf'
+        assert pdf_ev['media_path'].endswith('.png')  # Bien converti en PNG pour la TV
+        client.delete(f'/api/events/{pdf_event_id}', headers=auth_header)
+
+    finally:
+        if event_id:
+            client.delete(f'/api/events/{event_id}', headers=auth_header)
+        db = SessionLocal()
+        for e in db.query(Event).filter(Event.titre == '__TEST_CONFERENCE_ANNUELLE__').all():
+            db.delete(e)
+        db.commit()
+        db.close()
+        if created_file:
+            real_path = os.path.join(os.path.dirname(__file__), created_file.lstrip('/'))
+            if os.path.exists(real_path):
+                try: os.remove(real_path)
+                except Exception: pass
+
+
+

@@ -1,17 +1,19 @@
 let currentCycleIndex = 0;
 let currentCyclePageIndex = 0;
 const MAX_PER_PAGE = 8;        // 8 séances max par colonne (4 lignes de 2) calibré pour grande télé dans le hall
-const cycles = ['licence', 'ingenieur', 'master', 'fc', 're'];
+const cycles = ['licence', 'ingenieur', 'master', 'fc', 're', 'event'];
 const cycleNames = {
     'licence': 'CYCLE LICENCE',
     'ingenieur': "CYCLE INGÉNIEUR D'ETAT",
     'master': 'CYCLE MASTER',
     'fc': 'FORMATION CONTINUE',
-    're': 'RELATIONS ENTREPRISES'
+    're': 'RELATIONS ENTREPRISES',
+    'event': 'ACCUEIL & ÉVÉNEMENT'
 };
 const SPLASH_MS = 3000;       // 3 s pour la page d'accueil (selon demande utilisateur)
 const ROTATION_MS = 6000;     // 6 s par page de cours (Formation Initiale)
 const FC_ROTATION_MS = 10000; // 10 s pour la Formation Continue (selon demande utilisateur)
+const EVENT_ROTATION_MS = 10000; // 10 s pour l'affiche d'événement en rotation
 const REFRESH_MS = 60000;    // rafraîchissement des données : 60 s
 let allData = null;
 let firstRenderDone = false;
@@ -159,9 +161,19 @@ function scheduleNextRotation(delayMs) {
 
 function getActiveCycleIndices() {
     if (!allData) return [];
+    // Si une affiche d'événement est en mode 'fige', elle monopolise l'écran
+    if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige') {
+        return [];
+    }
     const active = [];
     for (let i = 0; i < cycles.length; i++) {
         const cycleKey = cycles[i];
+        if (cycleKey === 'event') {
+            if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation') {
+                active.push(i);
+            }
+            continue;
+        }
         const list = allData[cycleKey];
         if (list && list.length > 0) {
             if (cycleKey === 're' || cycleKey === 'fc') {
@@ -176,7 +188,44 @@ function getActiveCycleIndices() {
 
 function getCycleDuration(cycleKey) {
     if (cycleKey === 'fc') return FC_ROTATION_MS;
+    if (cycleKey === 'event') return EVENT_ROTATION_MS;
     return ROTATION_MS;
+}
+
+function applyModeFige(poster) {
+    if (rotationTimeout) clearTimeout(rotationTimeout);
+    document.body.classList.add('mode-fige');
+    showMainContent();
+
+    // En-tête seul avec titre de l'événement
+    document.getElementById('current-cycle').innerText = poster.titre ? String(poster.titre).toUpperCase() : 'BIENVENUE À L\'ESITH';
+
+    // Masque les cours
+    const yearCols = document.getElementById('year-columns');
+    if (yearCols) yearCols.style.display = 'none';
+    const noCourses = document.getElementById('no-courses');
+    if (noCourses) noCourses.style.display = 'none';
+
+    // Affiche le conteneur d'affiche
+    const posterContainer = document.getElementById('event-poster-container');
+    const posterImg = document.getElementById('event-poster-img');
+    if (posterContainer && posterImg) {
+        if (posterImg.src !== poster.media_path) {
+            posterImg.src = poster.media_path;
+        }
+        posterContainer.style.display = 'flex';
+    }
+}
+
+function removeModeFige() {
+    if (document.body.classList.contains('mode-fige')) {
+        document.body.classList.remove('mode-fige');
+        const posterContainer = document.getElementById('event-poster-container');
+        if (posterContainer) posterContainer.style.display = 'none';
+        if (!rotationTimeout) {
+            scheduleNextRotation(500);
+        }
+    }
 }
 
 function stepRotation() {
@@ -265,6 +314,14 @@ async function fetchData() {
             } else {
                 banner.style.display = 'none';
             }
+        }
+
+        // ── Gestion du mode Figé (Accueil exclusif avec affiche d'événement toute la journée) ──
+        if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige') {
+            applyModeFige(allData.event_poster);
+            return;
+        } else {
+            removeModeFige();
         }
 
         if (!firstRenderDone) {
@@ -538,6 +595,33 @@ function renderCycle() {
     yearColumns.style.display = 'flex';
 
     const cycleKey = cycles[currentCycleIndex];
+    const posterContainer = document.getElementById('event-poster-container');
+    const posterImg = document.getElementById('event-poster-img');
+    const legend = document.querySelector('.legend');
+
+    // ── Événement (Affiche d'accueil dans la rotation) ──
+    if (cycleKey === 'event') {
+        yearColumns.style.display = 'none';
+        if (legend) legend.style.display = 'none';
+
+        const poster = allData && allData.event_poster;
+        document.getElementById('current-cycle').innerText = poster && poster.titre ? String(poster.titre).toUpperCase() : 'ACCUEIL & ÉVÉNEMENT';
+
+        if (posterContainer && posterImg && poster && poster.media_path) {
+            if (posterImg.src !== poster.media_path) {
+                posterImg.src = poster.media_path;
+            }
+            posterContainer.style.display = 'flex';
+        }
+        return 1;
+    }
+
+    // Réinitialisation pour les cycles de cours normaux
+    if (posterContainer) posterContainer.style.display = 'none';
+    if (legend && !document.body.classList.contains('mode-fige')) {
+        legend.style.display = 'flex';
+    }
+
     let courses = [];
     if (cycleKey === 're' || cycleKey === 'fc') {
         // Pour RE et FC, les séances programmées pour le jour restent visibles toute la journée.

@@ -484,9 +484,48 @@ def get_all_data():
             events.append((d or t, e))
     events.sort(key=lambda x: (x[0], clean(x[1].heure_debut)))
 
+    # Recherche d'une affiche d'événement à afficher sur l'écran du Hall :
+    # 1. Soit marquée "force_active=True"
+    # 2. Soit dont la date correspond à aujourd'hui (ou display_date)
+    poster_event = (
+        db.query(Event)
+        .filter(Event.actif == True, Event.media_path.isnot(None), Event.force_active == True)
+        .order_by(Event.id.desc())
+        .first()
+    )
+    if not poster_event:
+        poster_event = (
+            db.query(Event)
+            .filter(Event.actif == True, Event.media_path.isnot(None), Event.date == today)
+            .order_by(Event.id.desc())
+            .first()
+        )
+    if not poster_event and not is_today:
+        poster_event = (
+            db.query(Event)
+            .filter(Event.actif == True, Event.media_path.isnot(None), Event.date == display_date)
+            .order_by(Event.id.desc())
+            .first()
+        )
+
+    event_poster = None
+    if poster_event and poster_event.media_path:
+        event_poster = {
+            "id": poster_event.id,
+            "titre": clean(poster_event.titre),
+            "date": clean(poster_event.date),
+            "lieu": clean(poster_event.lieu),
+            "heure_debut": clean(poster_event.heure_debut),
+            "media_path": poster_event.media_path,
+            "media_type": poster_event.media_type or 'image',
+            "mode_affichage": poster_event.mode_affichage or 'rotation',
+            "force_active": bool(poster_event.force_active)
+        }
+
     data = {
         "date_affichee": display_date,
         "is_today": is_today,
+        "event_poster": event_poster,
         "licence": [], "master": [], "ingenieur": [], "fc": [], "re": [],
         "absences": [{"groupe": clean(a.groupe), "prof": clean(a.prof), "heure": clean(a.heure), "motif": clean(a.motif)} for a in absences],
         "retards": [{"groupe": clean(r.groupe), "prof": clean(r.prof), "heure": clean(r.heure_prevue), "duree": clean(r.duree_retard)} for r in retards],
@@ -911,8 +950,63 @@ def get_salles_groupe():
 # -----------------
 # Event Routes
 # -----------------
+UPLOAD_EVENTS_DIR = os.path.join(STATIC_DIR, 'uploads', 'events')
+os.makedirs(UPLOAD_EVENTS_DIR, exist_ok=True)
+
+
+def save_event_media(file_storage):
+    """Sauvegarde une image ou convertit la 1ère page d'un PDF en PNG haute résolution."""
+    if not file_storage or not file_storage.filename:
+        return None, None
+    ext = os.path.splitext(file_storage.filename)[1].lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.webp', '.pdf'):
+        raise ValueError("Format non supporté. Formats acceptés : PNG, JPG, JPEG, WEBP ou PDF.")
+
+    import uuid
+    unique_id = uuid.uuid4().hex[:12]
+    out_filename = f"event_{unique_id}.png"
+    out_path = os.path.join(UPLOAD_EVENTS_DIR, out_filename)
+
+    raw = file_storage.read()
+    if not raw:
+        raise ValueError("Le fichier téléversé est vide.")
+
+    if ext == '.pdf':
+        try:
+            import fitz
+            doc = fitz.open(stream=raw, filetype="pdf")
+            if len(doc) == 0:
+                raise ValueError("Le fichier PDF ne contient aucune page.")
+            page = doc[0]
+            pix = page.get_pixmap(dpi=200)
+            pix.save(out_path)
+            doc.close()
+            return f"/static/uploads/events/{out_filename}", 'pdf'
+        except Exception as e:
+            raise ValueError(f"Erreur de conversion PDF : {e}")
+    else:
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ('RGBA', 'LA') and ext in ('.jpg', '.jpeg'):
+            bg = Image.new('RGB', img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        img.save(out_path, format='PNG', optimize=True)
+        return f"/static/uploads/events/{out_filename}", 'image'
+
+
 def event_to_dict(e):
-    return {"id": e.id, "titre": clean(e.titre), "date": clean(e.date), "heure_debut": clean(e.heure_debut), "lieu": clean(e.lieu)}
+    return {
+        "id": e.id,
+        "titre": clean(e.titre),
+        "date": clean(e.date),
+        "heure_debut": clean(e.heure_debut),
+        "lieu": clean(e.lieu),
+        "media_path": e.media_path,
+        "media_type": e.media_type,
+        "mode_affichage": e.mode_affichage or 'rotation',
+        "force_active": bool(e.force_active)
+    }
 
 
 @app.route('/api/events', methods=['GET'])
@@ -929,18 +1023,51 @@ def list_events():
 def create_event(current_user):
     if not roles_allowed(current_user, 'DEE', 'DRE'):
         return forbidden()
-    data = request.get_json(silent=True) or {}
+
+    file = request.files.get('file') or request.files.get('media')
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+    else:
+        data = request.form.to_dict()
+
     titre = clean(data.get('titre'))
     date = normalize_date(data.get('date'))
     if not titre or not date:
         return jsonify({"error": "Titre et date obligatoires"}), 400
+
+    media_path, media_type = None, None
+    if file and file.filename:
+        try:
+            media_path, media_type = save_event_media(file)
+        except Exception as err:
+            return jsonify({"error": str(err)}), 400
+
+    mode_affichage = clean(data.get('mode_affichage')) or 'rotation'
+    if mode_affichage not in ('rotation', 'fige'):
+        mode_affichage = 'rotation'
+
+    force_active = str(data.get('force_active', '')).lower() in ('true', '1', 'yes', 'on')
+
     db = get_db()
-    e = Event(titre=titre, date=date, heure_debut=normalize_time(data.get('heure_debut')), lieu=clean(data.get('lieu')))
+    if force_active and mode_affichage == 'fige':
+        db.query(Event).filter(Event.mode_affichage == 'fige').update({Event.force_active: False})
+
+    e = Event(
+        titre=titre,
+        date=date,
+        heure_debut=normalize_time(data.get('heure_debut')),
+        lieu=clean(data.get('lieu')),
+        media_path=media_path,
+        media_type=media_type,
+        mode_affichage=mode_affichage,
+        force_active=force_active,
+        actif=True
+    )
     db.add(e)
     db.commit()
     cleanup_expired_records(db)
-    log_action(db, current_user, "Création événement", f"ID {e.id}: {titre} ({date})")
-    return jsonify({"success": True, "id": e.id})
+    log_action(db, current_user, "Création événement", f"ID {e.id}: {titre} ({date})" + (f" [Affiche: {mode_affichage}]" if media_path else ""))
+    return jsonify({"success": True, "id": e.id, "event": event_to_dict(e)})
 
 
 @app.route('/api/events/<int:id>', methods=['PUT', 'DELETE'])
@@ -954,7 +1081,12 @@ def update_delete_event(current_user, id):
         return jsonify({"error": "Événement introuvable"}), 404
 
     if request.method == 'PUT':
-        data = request.get_json(silent=True) or {}
+        file = request.files.get('file') or request.files.get('media')
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+        else:
+            data = request.form.to_dict()
+
         if 'titre' in data and clean(data['titre']):
             e.titre = clean(data['titre'])
         if 'date' in data and data['date']:
@@ -963,13 +1095,42 @@ def update_delete_event(current_user, id):
             e.heure_debut = normalize_time(data['heure_debut'])
         if 'lieu' in data:
             e.lieu = clean(data['lieu'])
+        if 'mode_affichage' in data and data['mode_affichage'] in ('rotation', 'fige'):
+            e.mode_affichage = data['mode_affichage']
+        if 'force_active' in data:
+            e.force_active = str(data['force_active']).lower() in ('true', '1', 'yes', 'on')
+            if e.force_active and e.mode_affichage == 'fige':
+                db.query(Event).filter(Event.id != id, Event.mode_affichage == 'fige').update({Event.force_active: False})
+
+        if file and file.filename:
+            try:
+                new_path, new_type = save_event_media(file)
+                if e.media_path:
+                    old_file = os.path.join(STATIC_DIR, e.media_path.replace('/static/', '').lstrip('/'))
+                    if os.path.exists(old_file):
+                        try: os.remove(old_file)
+                        except Exception: pass
+                e.media_path = new_path
+                e.media_type = new_type
+            except Exception as err:
+                return jsonify({"error": str(err)}), 400
+        elif str(data.get('remove_media', '')).lower() in ('true', '1', 'yes'):
+            if e.media_path:
+                old_file = os.path.join(STATIC_DIR, e.media_path.replace('/static/', '').lstrip('/'))
+                if os.path.exists(old_file):
+                    try: os.remove(old_file)
+                    except Exception: pass
+            e.media_path = None
+            e.media_type = None
+
         log_action(db, current_user, "Modification événement", f"ID {id}: {e.titre}")
+        db.commit()
+        return jsonify({"success": True, "event": event_to_dict(e)})
     else:
         e.actif = False  # soft delete
         log_action(db, current_user, "Suppression événement", f"ID {id}: {e.titre}")
-
-    db.commit()
-    return jsonify({"success": True})
+        db.commit()
+        return jsonify({"success": True})
 
 
 # -----------------
