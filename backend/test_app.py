@@ -195,3 +195,43 @@ def test_cleanup_expired_events_and_same_day_alerts(client):
         db.commit()
         db.close()
 
+
+def test_re_and_fc_follow_display_date(client):
+    from database import SessionLocal, Cours, Formation
+    from app import CYCLE_RE, today_str
+    db = SessionLocal()
+    today_s = today_str()
+    other_s = "01/01/2030"
+
+    try:
+        # Ajout de cours RE et Formation : 1 pour aujourd'hui, 1 pour une autre date
+        c_today = Cours(date=today_s, salle="S_TODAY", groupe="__TEST_RE_TODAY__", Cycle=CYCLE_RE)
+        c_other = Cours(date=other_s, salle="S_OTHER", groupe="__TEST_RE_OTHER__", Cycle=CYCLE_RE)
+        f_today = Formation(titre="__TEST_FC_TODAY__", date=today_s, salle="S_FC1", actif=True)
+        f_other = Formation(titre="__TEST_FC_OTHER__", date=other_s, salle="S_FC2", actif=True)
+        db.add_all([c_today, c_other, f_today, f_other])
+        db.commit()
+
+        res = client.get('/api/hall/all_data')
+        assert res.status_code == 200
+        data = res.get_json()
+
+        # RE doit contenir uniquement la session du jour
+        re_groupes = [r['groupe'] for r in data.get('re', [])]
+        assert "__TEST_RE_TODAY__" in re_groupes
+        assert "__TEST_RE_OTHER__" not in re_groupes
+
+        # FC doit contenir uniquement la formation du jour
+        fc_modules = [f['module'] or f['groupe'] for f in data.get('fc', [])]
+        assert "__TEST_FC_TODAY__" in fc_modules
+        assert "__TEST_FC_OTHER__" not in fc_modules
+
+    finally:
+        for c in db.query(Cours).filter(Cours.groupe.in_(["__TEST_RE_TODAY__", "__TEST_RE_OTHER__"])).all():
+            db.delete(c)
+        for f in db.query(Formation).filter(Formation.titre.in_(["__TEST_FC_TODAY__", "__TEST_FC_OTHER__"])).all():
+            db.delete(f)
+        db.commit()
+        db.close()
+
+

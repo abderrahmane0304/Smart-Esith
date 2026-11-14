@@ -161,9 +161,14 @@ function getActiveCycleIndices() {
     if (!allData) return [];
     const active = [];
     for (let i = 0; i < cycles.length; i++) {
-        const list = allData[cycles[i]];
-        if (list && list.length > 0 && filterCoursesByTime(list).length > 0) {
-            active.push(i);
+        const cycleKey = cycles[i];
+        const list = allData[cycleKey];
+        if (list && list.length > 0) {
+            if (cycleKey === 're' || cycleKey === 'fc') {
+                active.push(i);
+            } else if (filterCoursesByTime(list).length > 0) {
+                active.push(i);
+            }
         }
     }
     return active;
@@ -370,7 +375,7 @@ function timeToMinutes(timeStr) {
 
 function filterCoursesByTime(courses) {
     const now = new Date();
-    const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
     const isMorning = nowMin < 13 * 60; // avant 13h00
 
     // Les cours sans heures (fréquent pour FC / RE) restent toujours visibles
@@ -424,7 +429,7 @@ function filterCoursesByTime(courses) {
 //   3. Tout terminé → la dernière séance terminée → afficher
 function deduplicateCoursesByGroup(courses) {
     const now   = new Date();
-    const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
 
     // Regrouper par groupe
     const byGroup = {};
@@ -533,7 +538,21 @@ function renderCycle() {
     yearColumns.style.display = 'flex';
 
     const cycleKey = cycles[currentCycleIndex];
-    const courses = deduplicateCoursesByGroup(filterCoursesByTime(allData[cycleKey]));
+    let courses = [];
+    if (cycleKey === 're' || cycleKey === 'fc') {
+        // Pour RE et FC, les séances programmées pour le jour restent visibles toute la journée.
+        // Déduplication uniquement des doublons stricts.
+        const raw = allData[cycleKey] || [];
+        const seen = new Set();
+        courses = raw.filter(c => {
+            const sig = `${c.groupe || ''}|${c.module || ''}|${c.salle || ''}|${c.hd || ''}|${c.hf || ''}`;
+            if (seen.has(sig)) return false;
+            seen.add(sig);
+            return true;
+        });
+    } else {
+        courses = deduplicateCoursesByGroup(filterCoursesByTime(allData[cycleKey] || []));
+    }
 
     let totalPages = 1;
     currentCycleTotalPages = 1;
@@ -543,26 +562,49 @@ function renderCycle() {
         yearColumns.classList.add('fc-mode');
         gridHeader.innerHTML = '';
         gridHeader.style.display = 'none';
-        document.getElementById('current-cycle').innerText = cycleNames[cycleKey];
+
+        const isRe = (cycleKey === 're');
+        const maxPerPage = isRe ? 6 : 8;
+        totalPages = Math.max(1, Math.ceil(courses.length / maxPerPage));
+        currentCycleTotalPages = totalPages;
+        if (currentCyclePageIndex >= totalPages) {
+            currentCyclePageIndex = 0;
+        }
+
+        const baseTitle = cycleNames[cycleKey];
+        if (totalPages > 1) {
+            document.getElementById('current-cycle').innerHTML = `${baseTitle} <span class="page-badge">(${currentCyclePageIndex + 1}/${totalPages})</span>`;
+        } else {
+            document.getElementById('current-cycle').innerText = baseTitle;
+        }
+
+        const sortedCourses = [...courses]
+            .sort((a, b) => (a.hd || '99:99').localeCompare(b.hd || '99:99') || (a.groupe || '').localeCompare(b.groupe || ''));
+        const start = currentCyclePageIndex * maxPerPage;
+        const pageCourses = sortedCourses.slice(start, start + maxPerPage);
 
         const flat = document.createElement('div');
-        flat.className = 'flat-cards ' + (cycleKey === 'fc' ? 'grid-fc' : 'grid-re');
+        let gridClass = isRe ? 'grid-re' : 'grid-fc';
+        if (isRe) {
+            if (pageCourses.length === 1) gridClass += ' re-cols-1';
+            else if (pageCourses.length >= 5) gridClass += ' re-cols-3';
+            else gridClass += ' re-cols-2';
+        }
+        flat.className = 'flat-cards ' + gridClass;
 
-        [...courses]
-            .sort((a, b) => (a.hd || '99:99').localeCompare(b.hd || '99:99') || (a.groupe || '').localeCompare(b.groupe || ''))
-            .forEach(c => {
-                const div = document.createElement('div');
-                div.className = 'course-pill flat-card ' + (cycleKey === 'fc' ? 'card-fc' : 'card-re');
-                const horaire = c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : ''));
-                div.innerHTML = `
-                    ${horaire ? `<div class="flat-time">${esc(horaire)}</div>` : ''}
-                    <div class="flat-title">${esc(c.groupe || '')}</div>
-                    ${c.module ? `<div class="flat-sub">${esc(c.module)}</div>` : ''}
-                    ${c.prof ? `<div class="flat-prof">${esc(c.prof)}</div>` : ''}
-                    ${c.salle ? `<div class="flat-salle">${/^s(alle)?[\s.]/i.test(c.salle) ? '' : 'S. '}${esc(c.salle)}</div>` : ''}
-                `;
-                flat.appendChild(div);
-            });
+        pageCourses.forEach(c => {
+            const div = document.createElement('div');
+            div.className = 'course-pill flat-card ' + (isRe ? 'card-re' : 'card-fc');
+            const horaire = c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : ''));
+            div.innerHTML = `
+                ${horaire ? `<div class="flat-time">${esc(horaire)}</div>` : ''}
+                <div class="flat-title">${esc(c.groupe || '')}</div>
+                ${c.module ? `<div class="flat-sub">${esc(c.module)}</div>` : ''}
+                ${c.prof ? `<div class="flat-prof">${esc(c.prof)}</div>` : ''}
+                ${c.salle ? `<div class="flat-salle">${/^s(alle)?[\s.]/i.test(c.salle) ? '' : 'S. '}${esc(c.salle)}</div>` : ''}
+            `;
+            flat.appendChild(div);
+        });
 
         gridBody.appendChild(flat);
 

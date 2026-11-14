@@ -466,10 +466,9 @@ def get_all_data():
 
     cours = db.query(Cours).filter_by(date=display_date).all()
     
-    # Règle : Formation Continue et Relations Entreprises s'affichent toujours
-    # jusqu'à ce que de nouveaux fichiers soient importés (ils ne dépendent pas du jour affiché)
-    formations = db.query(Formation).filter_by(actif=True).all()
-    cours_re = db.query(Cours).filter_by(Cycle=CYCLE_RE).all()
+    # Règle : Formation Continue et Relations Entreprises suivent la date affichée
+    formations = db.query(Formation).filter_by(actif=True, date=display_date).all()
+    cours_re = [c for c in cours if c.Cycle == CYCLE_RE]
     
     today = today_str()
     absences = db.query(Absence).filter_by(date=today, actif=True).all()
