@@ -337,4 +337,83 @@ def test_event_poster_upload_and_modes(client):
                 except Exception: pass
 
 
+def test_re_and_fc_only_today(client):
+    from app import Cours, Formation, today_str, SessionLocal, CYCLE_RE
+    db = SessionLocal()
+    today = today_str()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime('%d/%m/%Y')
+
+    # Nettoyage préalable des tests
+    db.query(Cours).filter(Cours.module.in_(['__TEST_RE_TODAY__', '__TEST_RE_PAST__'])).delete()
+    db.commit()
+
+    try:
+        # Visite RE aujourd'hui
+        c_today = Cours(
+            date=today, Cycle=CYCLE_RE, groupe='ENTREPRISE_TEST_TODAY',
+            module='__TEST_RE_TODAY__', salle='SALLE_RE', hd='10:00', hf='12:00'
+        )
+        # Visite RE hier (ne doit JAMAIS apparaître)
+        c_past = Cours(
+            date=yesterday, Cycle=CYCLE_RE, groupe='ENTREPRISE_TEST_PAST',
+            module='__TEST_RE_PAST__', salle='SALLE_RE', hd='10:00', hf='12:00'
+        )
+        db.add_all([c_today, c_past])
+        db.commit()
+
+        res = client.get('/api/hall/all_data').get_json()
+        re_modules = [c['module'] for c in res.get('re', [])]
+        assert '__TEST_RE_TODAY__' in re_modules
+        assert '__TEST_RE_PAST__' not in re_modules
+
+    finally:
+        db.query(Cours).filter(Cours.module.in_(['__TEST_RE_TODAY__', '__TEST_RE_PAST__'])).delete()
+        db.commit()
+        db.close()
+
+
+def test_fi_cutoff_17h30(client):
+    from app import Cours, today_str, SessionLocal
+    db = SessionLocal()
+    today = today_str()
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).strftime('%d/%m/%Y')
+
+    db.query(Cours).filter(Cours.module.in_(['__TEST_FI_TODAY__', '__TEST_FI_TOMORROW__'])).delete()
+    db.commit()
+
+    try:
+        c_today = Cours(
+            date=today, Cycle='Licence', groupe='GCL1',
+            module='__TEST_FI_TODAY__', salle='S1', hd='09:00', hf='11:00'
+        )
+        c_tomorrow = Cours(
+            date=tomorrow, Cycle='Licence', groupe='GCL1',
+            module='__TEST_FI_TOMORROW__', salle='S2', hd='08:30', hf='10:30'
+        )
+        db.add_all([c_today, c_tomorrow])
+        db.commit()
+
+        # Simulation 14h00 (avant 17h30) -> Affiche aujourd'hui
+        res_before = client.get(f'/api/hall/all_data?date={today}&time=14:00').get_json()
+        assert res_before['is_tomorrow_fi'] is False
+        assert res_before['date_fi'] == today
+        licence_mods_before = [c['module'] for c in res_before.get('licence', [])]
+        assert '__TEST_FI_TODAY__' in licence_mods_before
+        assert '__TEST_FI_TOMORROW__' not in licence_mods_before
+
+        # Simulation 17h35 (à partir de 17h30) -> Affiche demain
+        res_after = client.get(f'/api/hall/all_data?date={today}&time=17:35').get_json()
+        assert res_after['is_tomorrow_fi'] is True
+        assert res_after['date_fi'] == tomorrow
+        licence_mods_after = [c['module'] for c in res_after.get('licence', [])]
+        assert '__TEST_FI_TOMORROW__' in licence_mods_after
+        assert '__TEST_FI_TODAY__' not in licence_mods_after
+
+    finally:
+        db.query(Cours).filter(Cours.module.in_(['__TEST_FI_TODAY__', '__TEST_FI_TOMORROW__'])).delete()
+        db.commit()
+        db.close()
+
+
+
 

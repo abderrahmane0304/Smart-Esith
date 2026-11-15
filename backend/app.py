@@ -432,23 +432,59 @@ def get_me(current_user):
 # Hall Routes
 # -----------------
 def resolve_display_date(db):
-    """Date affichée sur le Hall : aujourd'hui s'il y a des séances, sinon la date
-    la plus proche disposant de données (dernière date passée, sinon prochaine)."""
+    """Retourne la date du jour et indique si des séances existent aujourd'hui."""
     today = today_str()
-    has_today = (db.query(Cours.id).filter(Cours.date == today, Cours.Cycle != 'Autre').first()
-                 or db.query(Formation.id).filter_by(date=today, actif=True).first())
-    if has_today:
-        return today, True
+    has_today = (db.query(Cours.id).filter(Cours.date == today).first() is not None
+                 or db.query(Formation.id).filter_by(date=today, actif=True).first() is not None)
+    return today, has_today
 
-    dates = {d for (d,) in db.query(Cours.date).filter(Cours.Cycle != 'Autre').distinct().all()}
-    dates |= {d for (d,) in db.query(Formation.date).filter_by(actif=True).distinct().all()}
-    parsed = sorted(p for p in (parse_date(d) for d in dates) if p)
-    if not parsed:
-        return today, True
-    t = datetime.date.today()
-    past = [p for p in parsed if p <= t]
-    chosen = past[-1] if past else parsed[0]
-    return chosen.strftime('%d/%m/%Y'), False
+
+def resolve_fi_display_date(db, now=None):
+    """
+    Règle Formation Initiale :
+    - Avant 17h30 : séances d'aujourd'hui.
+    - À partir de 17h30 : planning de demain (ou prochain jour de cours si week-end).
+    Retourne (date_fi, is_tomorrow).
+    """
+    if now is None:
+        now = datetime.datetime.now()
+
+    today_date = now.date()
+    today_str_val = today_date.strftime('%d/%m/%Y')
+
+    # Heure pivot : 17h30
+    is_after_cutoff = (now.hour > 17 or (now.hour == 17 and now.minute >= 30))
+    if not is_after_cutoff:
+        return today_str_val, False
+
+    # À partir de 17h30 : chercher demain
+    tomorrow_date = today_date + datetime.timedelta(days=1)
+    tomorrow_str = tomorrow_date.strftime('%d/%m/%Y')
+
+    # Vérifie si demain a des cours de formation initiale
+    has_tomorrow_courses = db.query(Cours.id).filter(
+        Cours.date == tomorrow_str,
+        Cours.Cycle != CYCLE_RE,
+        Cours.Cycle != 'Autre'
+    ).first() is not None
+
+    if has_tomorrow_courses:
+        return tomorrow_str, True
+
+    # Si demain n'a pas de cours (ex. week-end vendredi/samedi),
+    # chercher les prochains jours dans les 3 jours suivants (ex. lundi)
+    future_dates = sorted([
+        p for p in (parse_date(d) for (d,) in db.query(Cours.date).filter(
+            Cours.Cycle != CYCLE_RE,
+            Cours.Cycle != 'Autre'
+        ).distinct().all())
+        if p and p > today_date
+    ])
+
+    if future_dates and (future_dates[0] - today_date).days <= 3:
+        return future_dates[0].strftime('%d/%m/%Y'), True
+
+    return tomorrow_str, True
 
 
 def fmt_h(hd, hf):
@@ -462,21 +498,40 @@ def fmt_h(hd, hf):
 def get_all_data():
     db = get_db()
     cleanup_expired_records(db)
-    display_date, is_today = resolve_display_date(db)
 
-    cours = db.query(Cours).filter_by(date=display_date).all()
-    
-    # Règle : Formation Continue et Relations Entreprises suivent la date affichée
-    formations = db.query(Formation).filter_by(actif=True, date=display_date).all()
-    cours_re = [c for c in cours if c.Cycle == CYCLE_RE]
-    
-    today = today_str()
+    now = datetime.datetime.now()
+    sim_date = request.args.get('date')
+    sim_time = request.args.get('time')
+    if sim_date:
+        parsed_d = parse_date(normalize_date(sim_date))
+        if parsed_d:
+            now = now.replace(year=parsed_d.year, month=parsed_d.month, day=parsed_d.day)
+    if sim_time:
+        try:
+            parts = sim_time.split(':')
+            now = now.replace(hour=int(parts[0]), minute=int(parts[1]))
+        except Exception:
+            pass
+
+    today = now.strftime('%d/%m/%Y')
+    fi_date, is_tomorrow_fi = resolve_fi_display_date(db, now)
+
+    # 1. Formation Initiale : suit fi_date (aujourd'hui avant 17h30, demain après 17h30)
+    cours_fi = db.query(Cours).filter(Cours.date == fi_date, Cours.Cycle != CYCLE_RE).all()
+
+    # 2. Relations Entreprises : STRICTEMENT AUJOURD'HUI
+    cours_re = db.query(Cours).filter(Cours.date == today, Cours.Cycle == CYCLE_RE).all()
+
+    # 3. Formation Continue : STRICTEMENT AUJOURD'HUI
+    formations = db.query(Formation).filter_by(actif=True, date=today).all()
+
+    # 4. Absences, Retards, Changements de salle : AUJOURD'HUI
     absences = db.query(Absence).filter_by(date=today, actif=True).all()
     retards = db.query(Retard).filter_by(date=today, actif=True).all()
     changements = db.query(ChangementSalle).filter_by(date=today, actif=True).all()
 
     # Événements : tous les événements actifs à venir (date >= aujourd'hui)
-    t = datetime.date.today()
+    t = now.date()
     events = []
     for e in db.query(Event).filter_by(actif=True).all():
         d = parse_date(e.date)
@@ -486,7 +541,7 @@ def get_all_data():
 
     # Recherche d'une affiche d'événement à afficher sur l'écran du Hall :
     # 1. Soit marquée "force_active=True"
-    # 2. Soit dont la date correspond à aujourd'hui (ou display_date)
+    # 2. Soit dont la date correspond à aujourd'hui
     poster_event = (
         db.query(Event)
         .filter(Event.actif == True, Event.media_path.isnot(None), Event.force_active == True)
@@ -497,13 +552,6 @@ def get_all_data():
         poster_event = (
             db.query(Event)
             .filter(Event.actif == True, Event.media_path.isnot(None), Event.date == today)
-            .order_by(Event.id.desc())
-            .first()
-        )
-    if not poster_event and not is_today:
-        poster_event = (
-            db.query(Event)
-            .filter(Event.actif == True, Event.media_path.isnot(None), Event.date == display_date)
             .order_by(Event.id.desc())
             .first()
         )
@@ -523,8 +571,12 @@ def get_all_data():
         }
 
     data = {
-        "date_affichee": display_date,
-        "is_today": is_today,
+        "date_affichee": fi_date if is_tomorrow_fi else today,
+        "date_jour": today,
+        "date_fi": fi_date,
+        "is_tomorrow_fi": is_tomorrow_fi,
+        "is_today": not is_tomorrow_fi,
+        "heure_actuelle": now.strftime('%H:%M:%S'),
         "event_poster": event_poster,
         "licence": [], "master": [], "ingenieur": [], "fc": [], "re": [],
         "absences": [{"groupe": clean(a.groupe), "prof": clean(a.prof), "heure": clean(a.heure), "motif": clean(a.motif)} for a in absences],
@@ -534,9 +586,7 @@ def get_all_data():
         "empreinte_carbone": load_config().get("empreinte_carbone", 0)
     }
 
-    for c in cours:
-        if c.Cycle == CYCLE_RE:
-            continue
+    for c in cours_fi:
         cycle = c.Cycle
         g = (c.groupe or '').upper()
         if any(g.startswith(p) for p in ['ITTI', 'IMS', 'CTM', 'EO', 'BDM', 'SL', 'INGTCG', 'CPTC', 'CPCP', 'LILI', 'LITC', 'GI_', 'THTH', 'THTC']):
@@ -1292,8 +1342,14 @@ def get_journal(current_user):
 @app.route('/api/hall/date', methods=['GET'])
 def get_display_date():
     db = get_db()
-    d, is_today = resolve_display_date(db)
-    return jsonify({"date_affichee": d, "is_today": is_today, "aujourdhui": today_str()})
+    d, has_today = resolve_display_date(db)
+    fi_date, is_tomorrow = resolve_fi_display_date(db)
+    return jsonify({
+        "date_affichee": fi_date if is_tomorrow else d,
+        "is_today": not is_tomorrow,
+        "is_tomorrow_fi": is_tomorrow,
+        "aujourdhui": today_str()
+    })
 
 
 # -----------------

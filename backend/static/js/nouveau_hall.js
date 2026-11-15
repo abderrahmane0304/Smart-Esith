@@ -166,6 +166,7 @@ function getActiveCycleIndices() {
         return [];
     }
     const active = [];
+    const isTomorrowFI = Boolean(allData.is_tomorrow_fi);
     for (let i = 0; i < cycles.length; i++) {
         const cycleKey = cycles[i];
         if (cycleKey === 'event') {
@@ -178,7 +179,7 @@ function getActiveCycleIndices() {
         if (list && list.length > 0) {
             if (cycleKey === 're' || cycleKey === 'fc') {
                 active.push(i);
-            } else if (filterCoursesByTime(list).length > 0) {
+            } else if (filterCoursesByTime(list, isTomorrowFI).length > 0) {
                 active.push(i);
             }
         }
@@ -231,15 +232,11 @@ function removeModeFige() {
 function stepRotation() {
     const active = getActiveCycleIndices();
     if (active.length === 0) {
-        if (isShowingSplash) {
-            showMainContent();
-            document.getElementById('current-cycle').innerText = 'PROGRAMME DU JOUR';
-            document.getElementById('year-columns').style.display = 'none';
-            document.getElementById('no-courses').style.display = 'block';
-            scheduleNextRotation(ROTATION_MS);
-        } else {
+        // S'il n'y a pas de visites ou séances programmées : afficher seulement la page d'accueil (splash)
+        if (!isShowingSplash) {
             showSplashScreen();
         }
+        scheduleNextRotation(5000);
         return;
     }
 
@@ -305,14 +302,17 @@ async function fetchData() {
             footer.style.display = 'none';
         }
 
-        // Indique la date affichée si ce n'est pas aujourd'hui (aucune séance aujourd'hui)
+        // Bandeau de date masqué par défaut (géré dynamiquement dans renderCycle selon le cycle)
         const banner = document.getElementById('date-banner');
         if (banner) {
-            if (allData.is_today === false && allData.date_affichee) {
-                banner.innerText = `Aucune séance aujourd'hui — Programme du ${allData.date_affichee}`;
-                banner.style.display = 'inline-block';
-            } else {
-                banner.style.display = 'none';
+            banner.style.display = 'none';
+        }
+
+        // Si aucune séance ni visite n'est programmée, afficher uniquement la page d'accueil (splash)
+        const active = getActiveCycleIndices();
+        if (active.length === 0 && (!allData.event_poster || allData.event_poster.mode_affichage !== 'fige')) {
+            if (!isShowingSplash) {
+                showSplashScreen();
             }
         }
 
@@ -430,7 +430,11 @@ function timeToMinutes(timeStr) {
     return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
 }
 
-function filterCoursesByTime(courses) {
+function filterCoursesByTime(courses, isTomorrow = false) {
+    if (isTomorrow) {
+        // Planning de demain : toutes les séances prévues pour demain sont valides
+        return courses;
+    }
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
     const isMorning = nowMin < 13 * 60; // avant 13h00
@@ -481,10 +485,12 @@ function filterCoursesByTime(courses) {
 
 // ── Pour chaque groupe : garde 1 seule séance selon l'heure actuelle ──────────
 // Priorité :
-//   1. Séance EN COURS (hd <= now <= hf)         → afficher
-//   2. Aucune en cours → PROCHAINE séance (hd > now, la plus tôt)  → afficher
-//   3. Tout terminé → la dernière séance terminée → afficher
-function deduplicateCoursesByGroup(courses) {
+//   - Pour demain : 1ère séance de reprise de la journée
+//   - Pour aujourd'hui :
+//       1. Séance EN COURS (hd <= now <= hf)         → afficher
+//       2. Aucune en cours → PROCHAINE séance (hd > now, la plus tôt)  → afficher
+//       3. Tout terminé → la dernière séance terminée → afficher
+function deduplicateCoursesByGroup(courses, isTomorrow = false) {
     const now   = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
 
@@ -510,6 +516,12 @@ function deduplicateCoursesByGroup(courses) {
 
         // Trier par heure de début
         const sorted = [...timed].sort((a, b) => timeToMinutes(a.hd) - timeToMinutes(b.hd));
+
+        if (isTomorrow) {
+            // Pour demain : première séance de reprise de la journée pour le groupe
+            result.push(sorted[0]);
+            continue;
+        }
 
         // Cherche la séance en cours
         const active = sorted.find(c => {
@@ -565,24 +577,37 @@ function getAlert(c) {
 function renderCycle() {
     if (!allData) return;
 
+    const isTomorrowFI = Boolean(allData && allData.is_tomorrow_fi);
+
     // Si on démarre un nouveau cycle (page 0), on cherche le prochain cycle non-vide
     if (currentCyclePageIndex === 0) {
         let foundCycle = false;
         let attempts = 0;
         while (attempts < cycles.length) {
-            const list = allData[cycles[currentCycleIndex]];
-            if (list && list.length > 0 && filterCoursesByTime(list).length > 0) {
-                foundCycle = true;
-                break;
+            const cKey = cycles[currentCycleIndex];
+            if (cKey === 'event') {
+                if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation') {
+                    foundCycle = true;
+                    break;
+                }
+            } else {
+                const list = allData[cKey];
+                if (list && list.length > 0) {
+                    if (cKey === 're' || cKey === 'fc') {
+                        foundCycle = true;
+                        break;
+                    } else if (filterCoursesByTime(list, isTomorrowFI).length > 0) {
+                        foundCycle = true;
+                        break;
+                    }
+                }
             }
             currentCycleIndex = (currentCycleIndex + 1) % cycles.length;
             attempts++;
         }
 
         if (!foundCycle) {
-            document.getElementById('current-cycle').innerText = 'PROGRAMME DU JOUR';
-            document.getElementById('year-columns').style.display = 'none';
-            document.getElementById('no-courses').style.display = 'block';
+            showSplashScreen();
             return;
         }
     }
@@ -598,6 +623,18 @@ function renderCycle() {
     const posterContainer = document.getElementById('event-poster-container');
     const posterImg = document.getElementById('event-poster-img');
     const legend = document.querySelector('.legend');
+    const isFICycle = (cycleKey === 'licence' || cycleKey === 'ingenieur' || cycleKey === 'master');
+
+    // Bandeau de date : affiché uniquement pour les cycles de Formation Initiale quand il s'agit du planning de demain
+    const banner = document.getElementById('date-banner');
+    if (banner) {
+        if (isTomorrowFI && isFICycle) {
+            banner.innerText = `Planning de demain — ${allData.date_fi || allData.date_affichee}`;
+            banner.style.display = 'inline-block';
+        } else {
+            banner.style.display = 'none';
+        }
+    }
 
     // ── Événement (Affiche d'accueil dans la rotation) ──
     if (cycleKey === 'event') {
@@ -635,7 +672,7 @@ function renderCycle() {
             return true;
         });
     } else {
-        courses = deduplicateCoursesByGroup(filterCoursesByTime(allData[cycleKey] || []));
+        courses = deduplicateCoursesByGroup(filterCoursesByTime(allData[cycleKey] || [], isTomorrowFI), isTomorrowFI);
     }
 
     let totalPages = 1;
