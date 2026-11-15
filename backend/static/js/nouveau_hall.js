@@ -165,8 +165,18 @@ function getActiveCycleIndices() {
     if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige') {
         return [];
     }
-    const active = [];
+
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+
+    // Règle : le matin, l'affichage des cours en direct commence à partir de 07h00
+    // Avant 07h00 du matin, l'écran reste sur la page d'accueil (splash)
     const isTomorrowFI = Boolean(allData.is_tomorrow_fi);
+    if (!isTomorrowFI && nowMin < 7 * 60) {
+        return [];
+    }
+
+    const active = [];
     for (let i = 0; i < cycles.length; i++) {
         const cycleKey = cycles[i];
         if (cycleKey === 'event') {
@@ -431,55 +441,105 @@ function timeToMinutes(timeStr) {
 }
 
 function filterCoursesByTime(courses, isTomorrow = false) {
+    const MORNING_CUTOFF = 12 * 60 + 30; // 12h30
+
     if (isTomorrow) {
-        // Planning de demain : toutes les séances prévues pour demain sont valides
-        return courses;
+        // ── Règle planning de demain (à partir de 17h30) ──
+        // 1. Détecter tous les sous-groupes ayant au moins une séance le matin (< 12h30)
+        const morningSubGroups = new Set();
+        for (const c of courses) {
+            const hdMin = timeToMinutes(c.hd);
+            if (hdMin !== null && hdMin < MORNING_CUTOFF) {
+                const tokens = (c.groupe || '').trim().split(/\s+/).filter(Boolean);
+                for (const t of tokens) {
+                    morningSubGroups.add(t.toUpperCase());
+                }
+            }
+        }
+
+        // 2. Afficher les séances du matin pour tous, et les séances de l'après-midi
+        // uniquement pour les filières qui n'ont AUCUN cours le matin
+        return courses.filter(c => {
+            const hdMin = timeToMinutes(c.hd);
+            if (hdMin === null) return true;
+            if (hdMin < MORNING_CUTOFF) return true;
+
+            const tokens = (c.groupe || '').trim().split(/\s+/).filter(Boolean);
+            const hasMorning = tokens.some(t => morningSubGroups.has(t.toUpperCase()));
+            return !hasMorning;
+        });
     }
+
+    // ── Règle affichage en direct aujourd'hui ──
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    const isMorning = nowMin < 13 * 60; // avant 13h00
+    const isMorning = (nowMin < MORNING_CUTOFF); // avant 12h30
 
-    // Les cours sans heures (fréquent pour FC / RE) restent toujours visibles
     const withoutTime = courses.filter(c => timeToMinutes(c.hd) === null);
-
-    // Les cours avec heures
     const withTime = courses.filter(c => timeToMinutes(c.hd) !== null);
 
     let filteredWithTime = [];
 
-    // Séances actuellement en cours (hd <= now <= hf, tolérance +30 min avant hd)
-    const active = withTime.filter(c => {
-        const hd = timeToMinutes(c.hd);
-        const hf = timeToMinutes(c.hf);
-        const start = hd - 30;
-        const end = hf !== null ? hf : hd + 120;
-        return nowMin >= start && nowMin <= end;
-    });
+    if (isMorning) {
+        // Le matin (dès 07h00) : SEULEMENT les séances des filières qui ont cours le matin (< 12h30)
+        // Les filières qui n'ont cours que l'après-midi ne s'affichent pas le matin
+        const morningCourses = withTime.filter(c => timeToMinutes(c.hd) < MORNING_CUTOFF);
 
-    if (active.length > 0) {
-        filteredWithTime = active;
-    } else {
-        // Aucune séance en cours → séances de la demi-journée pas encore terminées
-        const upcoming = withTime.filter(c => {
+        // 1. Séances du matin actuellement en cours (hd - 30 <= now <= hf)
+        const active = morningCourses.filter(c => {
             const hd = timeToMinutes(c.hd);
             const hf = timeToMinutes(c.hf);
+            const start = hd - 30;
             const end = hf !== null ? hf : hd + 120;
-            const isCurrentHalfDay = isMorning ? hd < 13 * 60 : hd >= 13 * 60;
-            return isCurrentHalfDay && end > nowMin;
+            return nowMin >= start && nowMin <= end;
         });
 
-        if (upcoming.length > 0) {
-            filteredWithTime = upcoming;
+        if (active.length > 0) {
+            filteredWithTime = active;
         } else {
-            // Fallback : toutes les séances de la demi-journée (déjà terminées incluses)
-            filteredWithTime = withTime.filter(c => {
+            // 2. Séances du matin pas encore terminées (end > nowMin)
+            const upcoming = morningCourses.filter(c => {
                 const hd = timeToMinutes(c.hd);
-                return isMorning ? hd < 13 * 60 : hd >= 13 * 60;
+                const hf = timeToMinutes(c.hf);
+                const end = hf !== null ? hf : hd + 120;
+                return end > nowMin;
             });
+            if (upcoming.length > 0) {
+                filteredWithTime = upcoming;
+            } else {
+                // Fallback : séances du matin terminées
+                filteredWithTime = morningCourses;
+            }
+        }
+    } else {
+        // Après-midi : séances à partir de 12h30
+        const afternoonCourses = withTime.filter(c => timeToMinutes(c.hd) >= MORNING_CUTOFF);
+
+        const active = afternoonCourses.filter(c => {
+            const hd = timeToMinutes(c.hd);
+            const hf = timeToMinutes(c.hf);
+            const start = hd - 30;
+            const end = hf !== null ? hf : hd + 120;
+            return nowMin >= start && nowMin <= end;
+        });
+
+        if (active.length > 0) {
+            filteredWithTime = active;
+        } else {
+            const upcoming = afternoonCourses.filter(c => {
+                const hd = timeToMinutes(c.hd);
+                const hf = timeToMinutes(c.hf);
+                const end = hf !== null ? hf : hd + 120;
+                return end > nowMin;
+            });
+            if (upcoming.length > 0) {
+                filteredWithTime = upcoming;
+            } else {
+                filteredWithTime = afternoonCourses;
+            }
         }
     }
 
-    // Combine courses with time and without time
     return [...filteredWithTime, ...withoutTime];
 }
 
@@ -764,11 +824,11 @@ function renderCycle() {
             const listY = coursesParsed
                 .filter(c => c.year === y)
                 .sort((a, b) => {
+                    const hA = (a.hd || '00:00').localeCompare(b.hd || '00:00');
+                    if (hA !== 0) return hA;
                     const fA = (a.filiere || 'AUTRE').localeCompare(b.filiere || 'AUTRE');
                     if (fA !== 0) return fA;
-                    const gA = (a.groupe || '').localeCompare(b.groupe || '');
-                    if (gA !== 0) return gA;
-                    return (a.hd || '00:00').localeCompare(b.hd || '00:00');
+                    return (a.groupe || '').localeCompare(b.groupe || '');
                 });
             coursesByYear.push(listY);
             if (listY.length > maxCoursesInAnyCol) {
