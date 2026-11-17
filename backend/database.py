@@ -1,5 +1,7 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, inspect, text
+import json
+import re
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -35,13 +37,30 @@ class Event(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     titre = Column(String, nullable=False)
     date = Column(String, nullable=False)
+    date_fin = Column(String, nullable=True)
     heure_debut = Column(String)
     lieu = Column(String)
     media_path = Column(String)
     media_type = Column(String)
     mode_affichage = Column(String, default='rotation')
     force_active = Column(Boolean, default=False)
+    duree_affichage_sec = Column(Integer, default=10)
     actif = Column(Boolean, default=True)
+
+class PlanningImport(Base):
+    """Historique et métadonnées des imports de plannings (Formation Initiale).
+    Lie les professeurs et les filières actives à une période précise (semaine / mois).
+    """
+    __tablename__ = 'planning_imports'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(255), nullable=True)
+    import_date = Column(String(30), nullable=True)  # YYYY-MM-DD HH:MM:SS
+    period_start = Column(String(20), nullable=True) # JJ/MM/AAAA
+    period_end = Column(String(20), nullable=True)   # JJ/MM/AAAA
+    period_type = Column(String(20), default='week') # 'week' ou 'month'
+    professors = Column(Text, nullable=True)         # JSON string (liste de profs)
+    filieres = Column(Text, nullable=True)           # JSON string (liste de filières)
+    active = Column(Boolean, default=True)
 
 class Absence(Base):
     __tablename__ = 'absences'
@@ -134,5 +153,44 @@ def init_db():
             ]
             db.add_all(default_users)
             db.commit()
+
+        # Initialiser PlanningImport si la table est vide mais des cours existent déjà
+        if db.query(PlanningImport).count() == 0:
+            fi_cours = db.query(Cours).filter(Cours.Cycle != 'Relations Entreprises').all()
+            if fi_cours:
+                import datetime
+                profs_set = set()
+                fils_set = set()
+                dates_set = set()
+                for c in fi_cours:
+                    if c.prof and c.prof.strip():
+                        profs_set.add(c.prof.strip())
+                    if c.groupe:
+                        for part in c.groupe.split():
+                            m = re.match(r'^([A-Za-z&]+)', part.strip())
+                            if m:
+                                fils_set.add(m.group(1).upper())
+                    if c.date:
+                        try:
+                            d = datetime.datetime.strptime(c.date, '%d/%m/%Y').date()
+                            dates_set.add(d)
+                        except Exception:
+                            pass
+                if dates_set:
+                    min_d = min(dates_set)
+                    max_d = max(dates_set)
+                    p_type = 'month' if (max_d - min_d).days > 10 else 'week'
+                    p_imp = PlanningImport(
+                        filename="Import existant (initial)",
+                        import_date=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        period_start=min_d.strftime('%d/%m/%Y'),
+                        period_end=max_d.strftime('%d/%m/%Y'),
+                        period_type=p_type,
+                        professors=json.dumps(sorted(list(profs_set)), ensure_ascii=False),
+                        filieres=json.dumps(sorted(list(fils_set)), ensure_ascii=False),
+                        active=True
+                    )
+                    db.add(p_imp)
+                    db.commit()
     finally:
         db.close()

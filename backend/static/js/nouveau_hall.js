@@ -159,10 +159,59 @@ function scheduleNextRotation(delayMs) {
     rotationTimeout = setTimeout(stepRotation, delayMs);
 }
 
+let currentPosterIndex = 0;
+let figeCarouselTimer = null;
+
+function renderPosterElement(poster, totalCount = 1, activeIdx = 0) {
+    const posterContainer = document.getElementById('event-poster-container');
+    const posterImg = document.getElementById('event-poster-img');
+    if (!posterContainer || !posterImg || !poster) return;
+
+    const cycleTitle = document.getElementById('current-cycle');
+    if (cycleTitle) {
+        cycleTitle.innerText = poster.titre ? String(poster.titre).toUpperCase() : 'BIENVENUE À L\'ESITH';
+    }
+
+    if (posterImg.src !== poster.media_path) {
+        posterImg.style.opacity = '0';
+        setTimeout(() => {
+            posterImg.src = poster.media_path;
+            posterImg.onload = () => { posterImg.style.opacity = '1'; };
+            posterImg.onerror = () => { posterImg.style.opacity = '1'; };
+        }, 120);
+    } else {
+        posterImg.style.opacity = '1';
+    }
+
+    // Indicateurs du carousel si plusieurs affiches
+    let indicators = document.getElementById('poster-carousel-indicators');
+    if (totalCount > 1) {
+        if (!indicators) {
+            indicators = document.createElement('div');
+            indicators.id = 'poster-carousel-indicators';
+            indicators.className = 'poster-indicators';
+            posterContainer.appendChild(indicators);
+        }
+        indicators.innerHTML = '';
+        for (let i = 0; i < totalCount; i++) {
+            const dot = document.createElement('span');
+            dot.className = `poster-dot ${i === activeIdx ? 'active' : ''}`;
+            indicators.appendChild(dot);
+        }
+        indicators.style.display = 'flex';
+    } else if (indicators) {
+        indicators.style.display = 'none';
+    }
+
+    posterContainer.style.display = 'flex';
+}
+
 function getActiveCycleIndices() {
     if (!allData) return [];
     // Si une affiche d'événement est en mode 'fige', elle monopolise l'écran
-    if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige') {
+    const hasFige = (allData.event_posters && allData.event_posters.some(p => p.mode_affichage === 'fige')) ||
+                    (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige');
+    if (hasFige) {
         return [];
     }
 
@@ -180,7 +229,9 @@ function getActiveCycleIndices() {
     for (let i = 0; i < cycles.length; i++) {
         const cycleKey = cycles[i];
         if (cycleKey === 'event') {
-            if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation') {
+            const hasRotation = (allData.event_posters && allData.event_posters.some(p => p.mode_affichage === 'rotation')) ||
+                                (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation');
+            if (hasRotation) {
                 active.push(i);
             }
             continue;
@@ -199,17 +250,27 @@ function getActiveCycleIndices() {
 
 function getCycleDuration(cycleKey) {
     if (cycleKey === 'fc') return FC_ROTATION_MS;
-    if (cycleKey === 'event') return EVENT_ROTATION_MS;
+    if (cycleKey === 'event') {
+        const rotationPosters = (allData && allData.event_posters)
+            ? allData.event_posters.filter(p => p.mode_affichage === 'rotation')
+            : [];
+        if (rotationPosters.length > 0) {
+            const idx = (currentPosterIndex > 0 ? currentPosterIndex - 1 : rotationPosters.length - 1) % rotationPosters.length;
+            const p = rotationPosters[idx];
+            if (p && p.duree_affichage_sec) {
+                return Math.max(3000, p.duree_affichage_sec * 1000);
+            }
+        }
+        return EVENT_ROTATION_MS;
+    }
     return ROTATION_MS;
 }
 
 function applyModeFige(poster) {
     if (rotationTimeout) clearTimeout(rotationTimeout);
+    if (figeCarouselTimer) clearTimeout(figeCarouselTimer);
     document.body.classList.add('mode-fige');
     showMainContent();
-
-    // En-tête seul avec titre de l'événement
-    document.getElementById('current-cycle').innerText = poster.titre ? String(poster.titre).toUpperCase() : 'BIENVENUE À L\'ESITH';
 
     // Masque les cours
     const yearCols = document.getElementById('year-columns');
@@ -217,18 +278,32 @@ function applyModeFige(poster) {
     const noCourses = document.getElementById('no-courses');
     if (noCourses) noCourses.style.display = 'none';
 
-    // Affiche le conteneur d'affiche
-    const posterContainer = document.getElementById('event-poster-container');
-    const posterImg = document.getElementById('event-poster-img');
-    if (posterContainer && posterImg) {
-        if (posterImg.src !== poster.media_path) {
-            posterImg.src = poster.media_path;
-        }
-        posterContainer.style.display = 'flex';
+    const figePosters = (allData && allData.event_posters && allData.event_posters.length > 0)
+        ? allData.event_posters.filter(p => p.mode_affichage === 'fige' || p.force_active)
+        : (poster ? [poster] : []);
+
+    const activeList = figePosters.length > 0 ? figePosters : (poster ? [poster] : []);
+    if (activeList.length === 0) return;
+
+    if (currentPosterIndex >= activeList.length) currentPosterIndex = 0;
+    const cur = activeList[currentPosterIndex];
+    renderPosterElement(cur, activeList.length, currentPosterIndex);
+
+    // Auto-défilement carousel en mode figé si plusieurs affiches
+    if (activeList.length > 1) {
+        const dur = Math.max(3000, (cur.duree_affichage_sec || 10) * 1000);
+        figeCarouselTimer = setTimeout(() => {
+            currentPosterIndex = (currentPosterIndex + 1) % activeList.length;
+            applyModeFige(poster);
+        }, dur);
     }
 }
 
 function removeModeFige() {
+    if (figeCarouselTimer) {
+        clearTimeout(figeCarouselTimer);
+        figeCarouselTimer = null;
+    }
     if (document.body.classList.contains('mode-fige')) {
         document.body.classList.remove('mode-fige');
         const posterContainer = document.getElementById('event-poster-container');
@@ -320,14 +395,16 @@ async function fetchData() {
 
         // Si aucune séance ni visite n'est programmée, afficher uniquement la page d'accueil (splash)
         const active = getActiveCycleIndices();
-        if (active.length === 0 && (!allData.event_poster || allData.event_poster.mode_affichage !== 'fige')) {
+        const hasFigePoster = (allData.event_posters && allData.event_posters.some(p => p.mode_affichage === 'fige')) ||
+                              (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige');
+        if (active.length === 0 && !hasFigePoster) {
             if (!isShowingSplash) {
                 showSplashScreen();
             }
         }
 
         // ── Gestion du mode Figé (Accueil exclusif avec affiche d'événement toute la journée) ──
-        if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'fige') {
+        if (hasFigePoster) {
             applyModeFige(allData.event_poster);
             return;
         } else {
@@ -701,14 +778,15 @@ function renderCycle() {
         yearColumns.style.display = 'none';
         if (legend) legend.style.display = 'none';
 
-        const poster = allData && allData.event_poster;
-        document.getElementById('current-cycle').innerText = poster && poster.titre ? String(poster.titre).toUpperCase() : 'ACCUEIL & ÉVÉNEMENT';
+        const rotationPosters = (allData && allData.event_posters && allData.event_posters.length > 0)
+            ? allData.event_posters.filter(p => p.mode_affichage === 'rotation')
+            : (allData && allData.event_poster ? [allData.event_poster] : []);
 
-        if (posterContainer && posterImg && poster && poster.media_path) {
-            if (posterImg.src !== poster.media_path) {
-                posterImg.src = poster.media_path;
-            }
-            posterContainer.style.display = 'flex';
+        if (rotationPosters.length > 0) {
+            if (currentPosterIndex >= rotationPosters.length) currentPosterIndex = 0;
+            const cur = rotationPosters[currentPosterIndex];
+            renderPosterElement(cur, rotationPosters.length, currentPosterIndex);
+            currentPosterIndex = (currentPosterIndex + 1) % rotationPosters.length;
         }
         return 1;
     }

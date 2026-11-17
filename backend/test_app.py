@@ -2,7 +2,13 @@ import pytest
 import os
 import json
 import datetime
-from app import app, normalize_date, detect_cycle, init_db, SessionLocal, User
+import io
+import openpyxl
+from app import (
+    app, normalize_date, detect_cycle, init_db, SessionLocal,
+    User, Cours, Event, Absence, Retard, PlanningImport,
+    extract_filieres_from_group, get_active_planning_import
+)
 
 @pytest.fixture
 def client():
@@ -413,6 +419,198 @@ def test_fi_cutoff_17h30(client):
         db.query(Cours).filter(Cours.module.in_(['__TEST_FI_TODAY__', '__TEST_FI_TOMORROW__'])).delete()
         db.commit()
         db.close()
+
+
+def test_feature1_dynamic_excel_import_and_active_period(client):
+    """Vérifie l'extraction dynamique des professeurs & filières et la règle de l'état vide."""
+    # Test extraction des filières à partir de groupes variés
+    assert extract_filieres_from_group("BDM2G1 BDM2G2") == {"BDM"}
+    assert extract_filieres_from_group("INGTCG1.1 INGTCG1.2") == {"INGTCG"}
+    assert extract_filieres_from_group("D&M1G1") == {"D&M"}
+    assert extract_filieres_from_group("EO3G1_A  EO3G1_B") == {"EO"}
+    assert extract_filieres_from_group("SL2G1 / SL2G2") == {"SL"}
+
+    # Test endpoint /api/dashboard/active-period-data pour la période courante
+    res = client.get('/api/dashboard/active-period-data')
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data['active'] is True
+    assert data['count_professors'] > 0
+    assert data['count_filieres'] > 0
+    assert 'BDM' in data['filieres']
+    assert isinstance(data['professors'], list)
+
+    # Test règle Empty State : une date d'une autre période ne doit pas renvoyer d'anciennes données
+    res_empty = client.get('/api/dashboard/active-period-data?date=01/01/2024')
+    assert res_empty.status_code == 200
+    data_empty = res_empty.get_json()
+    assert data_empty['active'] is False
+    assert data_empty['professors'] == []
+    assert data_empty['filieres'] == []
+    assert data_empty['count_professors'] == 0
+    assert data_empty['count_filieres'] == 0
+
+
+def test_feature2_weekly_professor_attendance_tracking_and_search(client):
+    """Vérifie le calcul Schedule vs Actuals et la recherche par nom de professeur."""
+    db = SessionLocal()
+    test_prof = "PROF_TEST_ATTENDANCE"
+    test_date1 = "16/11/2026"
+    test_date2 = "17/11/2026"
+    test_date3 = "18/11/2026"
+
+    # Nettoyage initial
+    db.query(Cours).filter(Cours.prof == test_prof).delete()
+    db.query(Absence).filter(Absence.prof == test_prof).delete()
+    db.query(Retard).filter(Retard.prof == test_prof).delete()
+    db.commit()
+
+    try:
+        # Séance 1 : lundi -> Présent par défaut (aucun retard ni absence)
+        c1 = Cours(date=test_date1, Cycle='Licence', prof=test_prof, groupe='CTM1G1', module='Module1', salle='S1', hd='08:30', hf='10:00')
+        # Séance 2 : mardi -> avec absence enregistrée -> Absent
+        c2 = Cours(date=test_date2, Cycle='Licence', prof=test_prof, groupe='CTM1G1', module='Module2', salle='S2', hd='10:15', hf='11:45')
+        # Séance 3 : mercredi -> avec retard enregistré -> En retard
+        c3 = Cours(date=test_date3, Cycle='Licence', prof=test_prof, groupe='CTM1G1', module='Module3', salle='S3', hd='14:00', hf='15:30')
+        db.add_all([c1, c2, c3])
+
+        # Enregistrement de l'absence pour mardi
+        abs_rec = Absence(prof=test_prof, groupe='CTM1G1', date=test_date2, heure='10:15', motif='Congé maladie')
+        # Enregistrement du retard pour mercredi
+        ret_rec = Retard(prof=test_prof, groupe='CTM1G1', date=test_date3, heure_prevue='14:00', duree_retard='20 min')
+        db.add_all([abs_rec, ret_rec])
+        db.commit()
+
+        # Recherche de l'enseignant via l'API
+        res = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_start=16/11/2026&date_end=21/11/2026')
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data['total_professors'] == 1
+        prof_info = data['professors'][0]
+        assert prof_info['prof'] == test_prof
+        assert prof_info['total_sessions'] == 3
+        assert prof_info['presents'] == 1
+        assert prof_info['absents'] == 1
+        assert prof_info['retards'] == 1
+
+        # Vérification du résumé jour par jour
+        summary = prof_info['summary_text']
+        assert "Lundi: Présent" in summary
+        assert "Mardi: Absent" in summary
+        assert "Mercredi: En retard" in summary
+
+    finally:
+        db.query(Cours).filter(Cours.prof == test_prof).delete()
+        db.query(Absence).filter(Absence.prof == test_prof).delete()
+        db.query(Retard).filter(Retard.prof == test_prof).delete()
+        db.commit()
+        db.close()
+
+
+def test_feature3_final_journal_export_excel(client):
+    """Vérifie la génération et le téléchargement du journal Excel multi-feuilles."""
+    res = client.get('/api/export-journal')
+    assert res.status_code == 200
+    assert 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' in res.headers.get('Content-Type', '')
+
+    # Chargement du classeur Excel en mémoire
+    wb = openpyxl.load_workbook(io.BytesIO(res.data))
+    sheet_names = wb.sheetnames
+
+    # Vérification stricte des 4 onglets demandés
+    assert 'Profs Présents' in sheet_names
+    assert 'Profs Absents' in sheet_names
+    assert 'Profs en Retard' in sheet_names
+    assert 'Séances Annulées' in sheet_names
+
+    # Vérification des colonnes de chaque feuille
+    ws_pres = wb['Profs Présents']
+    headers_pres = [cell.value for cell in ws_pres[1]]
+    assert 'Professeur' in headers_pres
+    assert 'Statut' in headers_pres
+
+    ws_abs = wb['Profs Absents']
+    headers_abs = [cell.value for cell in ws_abs[1]]
+    assert 'Professeur' in headers_abs
+    assert 'Date' in headers_abs
+
+    ws_ret = wb['Profs en Retard']
+    headers_ret = [cell.value for cell in ws_ret[1]]
+    assert 'Professeur' in headers_ret
+    assert 'Durée Retard' in headers_ret
+
+    ws_ann = wb['Séances Annulées']
+    headers_ann = [cell.value for cell in ws_ann[1]]
+    assert 'Professeur' in headers_ann
+    assert "Motif / Raison d'annulation" in headers_ann
+
+
+def test_feature4_event_posters_carousel_and_expiration(client):
+    """Vérifie les affiches d'événements, le support start/end date, la durée et l'auto-masquage."""
+    db = SessionLocal()
+    today_d = datetime.date.today()
+    today_str_val = today_d.strftime('%d/%m/%Y')
+    past_d = (today_d - datetime.timedelta(days=5)).strftime('%d/%m/%Y')
+    future_d = (today_d + datetime.timedelta(days=5)).strftime('%d/%m/%Y')
+
+    test_titre_active = "__TEST_POSTER_ACTIVE__"
+    test_titre_expired = "__TEST_POSTER_EXPIRED__"
+
+    db.query(Event).filter(Event.titre.in_([test_titre_active, test_titre_expired])).delete()
+    db.commit()
+
+    try:
+        # Affiche 1 : Active aujourd'hui (date de début aujourd'hui, date de fin dans 5 jours)
+        e_active = Event(
+            titre=test_titre_active,
+            date=today_str_val,
+            date_fin=future_d,
+            media_path="/static/uploads/events/test_active.png",
+            media_type="image",
+            mode_affichage="rotation",
+            duree_affichage_sec=12,
+            actif=True
+        )
+
+        # Affiche 2 : Expirée (date début et fin passées depuis 5 jours)
+        e_expired = Event(
+            titre=test_titre_expired,
+            date=past_d,
+            date_fin=past_d,
+            media_path="/static/uploads/events/test_expired.png",
+            media_type="image",
+            mode_affichage="rotation",
+            duree_affichage_sec=8,
+            actif=True
+        )
+
+        db.add_all([e_active, e_expired])
+        db.commit()
+
+        # Appel de l'API /api/hall/all_data
+        res = client.get('/api/hall/all_data')
+        assert res.status_code == 200
+        data = res.get_json()
+
+        # Vérifie que event_posters contient la liste des affiches valides
+        assert 'event_posters' in data
+        posters = data['event_posters']
+        poster_titles = [p['titre'] for p in posters]
+
+        # L'affiche active doit être présente avec sa durée
+        assert test_titre_active in poster_titles
+        active_poster_obj = next(p for p in posters if p['titre'] == test_titre_active)
+        assert active_poster_obj['duree_affichage_sec'] == 12
+        assert active_poster_obj['date_fin'] == future_d
+
+        # L'affiche expirée doit être automatiquement masquée
+        assert test_titre_expired not in poster_titles
+
+    finally:
+        db.query(Event).filter(Event.titre.in_([test_titre_active, test_titre_expired])).delete()
+        db.commit()
+        db.close()
+
 
 
 

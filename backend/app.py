@@ -6,11 +6,11 @@ import unicodedata
 import datetime
 import pandas as pd
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, send_from_directory, g
+from flask import Flask, request, jsonify, render_template, send_from_directory, g, send_file
 from flask_cors import CORS
 import jwt
 from werkzeug.security import check_password_hash
-from database import init_db, SessionLocal, Cours, Formation, Event, Absence, Retard, ChangementSalle, User, ActionLog
+from database import init_db, SessionLocal, Cours, Formation, Event, Absence, Retard, ChangementSalle, User, ActionLog, PlanningImport
 from clean_encoding import sanitize_string
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -190,6 +190,102 @@ def today_str():
     return datetime.datetime.now().strftime('%d/%m/%Y')
 
 
+JOURS_FR = {
+    0: 'Lundi', 1: 'Mardi', 2: 'Mercredi', 3: 'Jeudi',
+    4: 'Vendredi', 5: 'Samedi', 6: 'Dimanche'
+}
+
+
+def extract_filieres_from_group(groupe_str):
+    """Extrait les filières académiques à partir d'un groupe ou d'une liste de groupes.
+    Ex: 'BDM2G1 BDM2G2' -> {'BDM'}, 'INGTCG1.1' -> {'INGTCG'}, 'D&M1G1' -> {'D&M'}.
+    """
+    if not groupe_str:
+        return set()
+    fils = set()
+    for token in re.split(r'[\s,;/]+', clean(groupe_str)):
+        if not token:
+            continue
+        m = re.match(r'^([A-Za-z&]+)', token.strip())
+        if m:
+            fil = m.group(1).upper()
+            if len(fil) >= 2:
+                fils.add(fil)
+    return fils
+
+
+def get_active_planning_import(db, ref_date=None):
+    """Retourne les métadonnées et données actives de l'import de planning Formation Initiale.
+    Règle Empty State : Si aucun planning n'a été importé pour la période courante
+    (semaine ou mois couvrant ref_date), retourne active=False avec listes vides.
+    """
+    if ref_date is None:
+        ref_date = datetime.date.today()
+    elif isinstance(ref_date, str):
+        ref_date = parse_date(ref_date) or datetime.date.today()
+
+    # Semaine courante (Lundi -> Dimanche)
+    ref_monday = ref_date - datetime.timedelta(days=ref_date.weekday())
+    ref_sunday = ref_monday + datetime.timedelta(days=6)
+
+    # Récupère le dernier import actif
+    imports = db.query(PlanningImport).filter_by(active=True).order_by(PlanningImport.id.desc()).all()
+    for imp in imports:
+        d_start = parse_date(imp.period_start)
+        d_end = parse_date(imp.period_end)
+        if not d_start or not d_end:
+            continue
+
+        # Vérification si ref_date est couvert par l'import
+        is_covered = False
+        if imp.period_type == 'month':
+            # Même mois/année ou entre début et fin
+            if (d_start.year == ref_date.year and d_start.month == ref_date.month) or (d_start <= ref_date <= d_end):
+                is_covered = True
+        else:
+            # Semaine : chevauchement avec la semaine de ref_date
+            if (d_start <= ref_sunday and d_end >= ref_monday) or (d_start <= ref_date <= d_end):
+                is_covered = True
+
+        if is_covered:
+            try:
+                profs = json.loads(imp.professors or '[]')
+            except Exception:
+                profs = []
+            try:
+                fils = json.loads(imp.filieres or '[]')
+            except Exception:
+                fils = []
+            return {
+                "active": True,
+                "import_id": imp.id,
+                "filename": imp.filename,
+                "import_date": imp.import_date,
+                "period_start": imp.period_start,
+                "period_end": imp.period_end,
+                "period_type": imp.period_type,
+                "professors": sorted([p for p in profs if p and p.strip()]),
+                "filieres": sorted([f for f in fils if f and f.strip()]),
+                "count_professors": len(profs),
+                "count_filieres": len(fils)
+            }
+
+    # Empty state rule
+    return {
+        "active": False,
+        "import_id": None,
+        "filename": None,
+        "import_date": None,
+        "period_start": None,
+        "period_end": None,
+        "period_type": None,
+        "professors": [],
+        "filieres": [],
+        "count_professors": 0,
+        "count_filieres": 0
+    }
+
+
 def cleanup_expired_records(db=None):
     """Supprime les enregistrements expirés :
     - Événements passés depuis plus de 2 semaines (14 jours)
@@ -206,7 +302,9 @@ def cleanup_expired_records(db=None):
 
     try:
         for e in db.query(Event).all():
-            d = parse_date(e.date)
+            # Expiration : date_fin si spécifiée, sinon e.date
+            end_date_str = getattr(e, 'date_fin', None) or e.date
+            d = parse_date(end_date_str)
             if d is not None and d < events_cutoff:
                 db.delete(e)
                 deleted_events += 1
@@ -539,22 +637,53 @@ def get_all_data():
             events.append((d or t, e))
     events.sort(key=lambda x: (x[0], clean(x[1].heure_debut)))
 
-    # Recherche d'une affiche d'événement à afficher sur l'écran du Hall :
-    # 1. Soit marquée "force_active=True"
-    # 2. Soit dont la date correspond à aujourd'hui
-    poster_event = (
+    # Recherche des affiches d'événements valides (non expirées) pour l'écran du Hall
+    today_date = now.date()
+    raw_posters = (
         db.query(Event)
-        .filter(Event.actif == True, Event.media_path.isnot(None), Event.force_active == True)
-        .order_by(Event.id.desc())
-        .first()
+        .filter(Event.actif == True, Event.media_path.isnot(None), Event.media_path != '')
+        .order_by(Event.force_active.desc(), Event.id.desc())
+        .all()
     )
-    if not poster_event:
-        poster_event = (
-            db.query(Event)
-            .filter(Event.actif == True, Event.media_path.isnot(None), Event.date == today)
-            .order_by(Event.id.desc())
-            .first()
-        )
+
+    valid_posters = []
+    for e in raw_posters:
+        d_start = parse_date(e.date)
+        d_end = parse_date(e.date_fin) if getattr(e, 'date_fin', None) else d_start
+        if e.force_active:
+            # Forcé en direct : affiché immédiatement sauf si date_fin dépassée
+            if d_end and d_end < today_date:
+                continue
+            valid_posters.append(e)
+        else:
+            # Fenêtre de validité : start_date <= today_date <= end_date
+            if d_start and d_end:
+                if d_start <= today_date <= d_end:
+                    valid_posters.append(e)
+            elif e.date == today:
+                valid_posters.append(e)
+
+    event_posters_data = [
+        {
+            "id": e.id,
+            "titre": clean(e.titre),
+            "date": clean(e.date),
+            "date_fin": clean(getattr(e, 'date_fin', None)),
+            "lieu": clean(e.lieu),
+            "heure_debut": clean(e.heure_debut),
+            "media_path": e.media_path,
+            "media_type": e.media_type or 'image',
+            "mode_affichage": e.mode_affichage or 'rotation',
+            "force_active": bool(e.force_active),
+            "duree_affichage_sec": getattr(e, 'duree_affichage_sec', 10) or 10
+        }
+        for e in valid_posters
+    ]
+
+    # Poster prioritaire : figé en premier si actif aujourd'hui, sinon premier de la liste
+    poster_event = next((p for p in valid_posters if p.mode_affichage == 'fige'), None)
+    if not poster_event and valid_posters:
+        poster_event = valid_posters[0]
 
     event_poster = None
     if poster_event and poster_event.media_path:
@@ -562,12 +691,14 @@ def get_all_data():
             "id": poster_event.id,
             "titre": clean(poster_event.titre),
             "date": clean(poster_event.date),
+            "date_fin": clean(getattr(poster_event, 'date_fin', None)),
             "lieu": clean(poster_event.lieu),
             "heure_debut": clean(poster_event.heure_debut),
             "media_path": poster_event.media_path,
             "media_type": poster_event.media_type or 'image',
             "mode_affichage": poster_event.mode_affichage or 'rotation',
-            "force_active": bool(poster_event.force_active)
+            "force_active": bool(poster_event.force_active),
+            "duree_affichage_sec": getattr(poster_event, 'duree_affichage_sec', 10) or 10
         }
 
     data = {
@@ -578,6 +709,7 @@ def get_all_data():
         "is_today": not is_tomorrow_fi,
         "heure_actuelle": now.strftime('%H:%M:%S'),
         "event_poster": event_poster,
+        "event_posters": event_posters_data,
         "licence": [], "master": [], "ingenieur": [], "fc": [], "re": [],
         "absences": [{"groupe": clean(a.groupe), "prof": clean(a.prof), "heure": clean(a.heure), "motif": clean(a.motif)} for a in absences],
         "retards": [{"groupe": clean(r.groupe), "prof": clean(r.prof), "heure": clean(r.heure_prevue), "duree": clean(r.duree_retard)} for r in retards],
@@ -702,6 +834,10 @@ def import_planning(current_user):
 
     db = get_db()
     imported, ignored = 0, 0
+    dates_imported = set()
+    profs_imported = set()
+    fils_imported = set()
+
     try:
         # Reset Formation Initiale (règle 9.7)
         db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).delete(synchronize_session=False)
@@ -726,19 +862,55 @@ def import_planning(current_user):
                         hf = ''
 
             cycle = detect_cycle(clean(row[11]), f"{clean(row[13])} {clean(row[9])}")
+            prof_val = clean(row[8])
+            groupe_val = clean(row[9])
+
+            if prof_val:
+                profs_imported.add(prof_val)
+            if groupe_val:
+                fils_imported.update(extract_filieres_from_group(groupe_val))
+
+            d_parsed = parse_date(date)
+            if d_parsed:
+                dates_imported.add(d_parsed)
+
             db.add(Cours(
                 numDay=clean(row[2]),
                 date=date,
                 hd=hd,
                 hf=hf,
                 salle=clean(row[7]),
-                prof=clean(row[8]),
-                groupe=clean(row[9]),
+                prof=prof_val,
+                groupe=groupe_val,
                 module=clean(row[10]),
                 Cycle=cycle,
                 AppelFait=clean(row[14]) or 'Non'
             ))
             imported += 1
+
+        period_start_str, period_end_str = None, None
+        if imported > 0 and dates_imported:
+            min_d = min(dates_imported)
+            max_d = max(dates_imported)
+            period_start_str = min_d.strftime('%d/%m/%Y')
+            period_end_str = max_d.strftime('%d/%m/%Y')
+            p_type = 'month' if (max_d - min_d).days > 10 else 'week'
+
+            # Désactive les anciens imports
+            db.query(PlanningImport).update({PlanningImport.active: False})
+
+            new_import = PlanningImport(
+                filename=getattr(file, 'filename', 'planning_fi.xlsx') or 'planning_fi.xlsx',
+                import_date=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                period_start=period_start_str,
+                period_end=period_end_str,
+                period_type=p_type,
+                professors=json.dumps(sorted(list(profs_imported)), ensure_ascii=False),
+                filieres=json.dumps(sorted(list(fils_imported)), ensure_ascii=False),
+                active=True
+            )
+            db.add(new_import)
+
         db.commit()
     except Exception as e:
         db.rollback()
@@ -746,9 +918,363 @@ def import_planning(current_user):
 
     if imported == 0:
         return jsonify({"error": f"Aucune séance valide trouvée ({ignored} ligne(s) ignorée(s)). Vérifiez la colonne date."}), 400
-    log_action(db, current_user, "Import planning FI", f"{imported} séance(s) importée(s), {ignored} ligne(s) ignorée(s)")
-    return jsonify({"message": f"Import réussi : {imported} séance(s) importée(s), {ignored} ligne(s) ignorée(s).",
-                    "imported": imported, "ignored": ignored})
+    log_action(db, current_user, "Import planning FI", f"{imported} séance(s) importée(s), {len(profs_imported)} profs, {len(fils_imported)} filières")
+    return jsonify({
+        "message": f"Import réussi : {imported} séance(s) importée(s), {ignored} ligne(s) ignorée(s).",
+        "imported": imported,
+        "ignored": ignored,
+        "period_start": period_start_str,
+        "period_end": period_end_str,
+        "count_professors": len(profs_imported),
+        "count_filieres": len(fils_imported)
+    })
+
+
+@app.route('/api/dashboard/active-period-data', methods=['GET'])
+def get_active_period_data():
+    """Retourne les professeurs et filières de la période active (semaine / mois en cours).
+    Règle Empty State : Si aucun planning n'a été importé pour la période en cours,
+    retourne active=False avec des listes vides.
+    """
+    db = get_db()
+    req_date = request.args.get('date')
+    ref_d = parse_date(normalize_date(req_date)) if req_date else None
+    data = get_active_planning_import(db, ref_d)
+    return jsonify(data)
+
+
+@app.route('/api/dashboard/attendance', methods=['GET'])
+def get_attendance():
+    """Suivi et recherche des présences hebdomadaires des professeurs.
+    Compare les séances programmées du planning Excel (ex: Lundi, Mercredi, Vendredi)
+    avec les absences, retards ou annulations enregistrés.
+    Par défaut, une séance programmée sans alerte est marquée comme 'Présent'.
+    """
+    db = get_db()
+    prof_query = clean(request.args.get('prof', '')).lower()
+    filiere_query = clean(request.args.get('filiere', '')).upper()
+    req_start = request.args.get('date_start')
+    req_end = request.args.get('date_end')
+
+    active_imp = get_active_planning_import(db)
+    if req_start and req_end:
+        p_start_d = parse_date(normalize_date(req_start))
+        p_end_d = parse_date(normalize_date(req_end))
+    elif active_imp['active']:
+        p_start_d = parse_date(active_imp['period_start'])
+        p_end_d = parse_date(active_imp['period_end'])
+    else:
+        today = datetime.date.today()
+        p_start_d = today - datetime.timedelta(days=today.weekday())
+        p_end_d = p_start_d + datetime.timedelta(days=6)
+
+    cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
+    cours_in_period = []
+    for c in cours_all:
+        d = parse_date(c.date)
+        if d and p_start_d and p_end_d and p_start_d <= d <= p_end_d:
+            cours_in_period.append((d, c))
+
+    cours_in_period.sort(key=lambda x: (x[0], clean(x[1].hd)))
+
+    absences = db.query(Absence).filter_by(actif=True).all()
+    retards = db.query(Retard).filter_by(actif=True).all()
+
+    abs_by_prof_date = {}
+    for a in absences:
+        abs_by_prof_date.setdefault((clean(a.prof).lower(), a.date), []).append(a)
+
+    ret_by_prof_date = {}
+    for r in retards:
+        ret_by_prof_date.setdefault((clean(r.prof).lower(), r.date), []).append(r)
+
+    prof_sessions = {}
+    for d, c in cours_in_period:
+        prof_name = clean(c.prof)
+        if not prof_name:
+            continue
+        if prof_query and prof_query not in prof_name.lower():
+            continue
+
+        c_fils = extract_filieres_from_group(c.groupe)
+        if filiere_query and filiere_query not in c_fils:
+            continue
+
+        p_key = (prof_name.lower(), c.date)
+        status = "Présent"
+        details = ""
+
+        matched_abs = abs_by_prof_date.get(p_key)
+        if matched_abs:
+            cand = next((a for a in matched_abs if clean(a.groupe) in clean(c.groupe) or clean(c.groupe) in clean(a.groupe)), matched_abs[0])
+            motif_txt = clean(cand.motif) or ""
+            if 'annul' in motif_txt.lower():
+                status = "Annulé"
+                details = motif_txt or "Séance annulée"
+            else:
+                status = "Absent"
+                details = motif_txt or "Absence déclarée"
+        else:
+            matched_ret = ret_by_prof_date.get(p_key)
+            if matched_ret:
+                cand = next((r for r in matched_ret if clean(r.groupe) in clean(c.groupe) or clean(c.groupe) in clean(r.groupe)), matched_ret[0])
+                status = "En retard"
+                dur = clean(cand.duree_retard)
+                details = f"Retard: {dur}" if dur else "Retard signalé"
+
+        session_info = {
+            "id": c.id,
+            "date": c.date,
+            "day_name": JOURS_FR.get(d.weekday(), ""),
+            "date_sort": d.isoformat(),
+            "hd": clean(c.hd),
+            "hf": clean(c.hf),
+            "horaire": fmt_h(c.hd, c.hf),
+            "groupe": clean(c.groupe),
+            "filieres": list(c_fils),
+            "module": clean(c.module),
+            "salle": clean(c.salle),
+            "status": status,
+            "details": details
+        }
+        prof_sessions.setdefault(prof_name, []).append(session_info)
+
+    result_profs = []
+    for prof_name, sess_list in sorted(prof_sessions.items(), key=lambda x: x[0]):
+        sess_list.sort(key=lambda s: (s["date_sort"], s["hd"]))
+
+        days_map = {}
+        for s in sess_list:
+            d_key = s["date"]
+            if d_key not in days_map:
+                days_map[d_key] = {
+                    "date": d_key,
+                    "day_name": s["day_name"],
+                    "sessions": []
+                }
+            days_map[d_key]["sessions"].append(s)
+
+        days_summary = []
+        for d_key, d_obj in days_map.items():
+            day_statuses = [ss["status"] for ss in d_obj["sessions"]]
+            if all(st == "Présent" for st in day_statuses):
+                d_stat = "Présent"
+            elif any(st == "Absent" for st in day_statuses):
+                d_stat = "Absent"
+            elif any(st == "En retard" for st in day_statuses):
+                d_stat = "En retard"
+            elif any(st == "Annulé" for st in day_statuses):
+                d_stat = "Annulé"
+            else:
+                d_stat = "Mixte"
+            d_obj["day_status"] = d_stat
+            days_summary.append(d_obj)
+
+        total = len(sess_list)
+        presents = sum(1 for s in sess_list if s["status"] == "Présent")
+        absents = sum(1 for s in sess_list if s["status"] == "Absent")
+        retards_cnt = sum(1 for s in sess_list if s["status"] == "En retard")
+        annules = sum(1 for s in sess_list if s["status"] == "Annulé")
+
+        summary_text = ", ".join(f"{d['day_name']}: {d['day_status']}" for d in days_summary)
+
+        all_fils = set()
+        for s in sess_list:
+            all_fils.update(s["filieres"])
+
+        result_profs.append({
+            "prof": prof_name,
+            "filieres": sorted(list(all_fils)),
+            "total_sessions": total,
+            "presents": presents,
+            "absents": absents,
+            "retards": retards_cnt,
+            "annules": annules,
+            "summary_text": f"Prof. {prof_name} — {summary_text}" if summary_text else f"Prof. {prof_name}",
+            "days": days_summary,
+            "sessions": sess_list
+        })
+
+    return jsonify({
+        "period": {
+            "start": p_start_d.strftime('%d/%m/%Y') if p_start_d else '',
+            "end": p_end_d.strftime('%d/%m/%Y') if p_end_d else ''
+        },
+        "total_professors": len(result_profs),
+        "professors": result_profs
+    })
+
+
+@app.route('/api/export-journal', methods=['GET'])
+@app.route('/api/dashboard/export-journal', methods=['GET'])
+def export_journal():
+    """Génère et télécharge le rapport Excel (.xlsx) multi-feuilles :
+    1. Profs Présents (séances honorées)
+    2. Profs Absents (professeur, date, filière, module)
+    3. Profs en Retard (professeur, date, filière, durée retard)
+    4. Séances Annulées (professeur, date, filière, motif)
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    db = get_db()
+    req_start = request.args.get('date_start')
+    req_end = request.args.get('date_end')
+
+    active_imp = get_active_planning_import(db)
+    if req_start and req_end:
+        p_start_d = parse_date(normalize_date(req_start))
+        p_end_d = parse_date(normalize_date(req_end))
+    elif active_imp['active']:
+        p_start_d = parse_date(active_imp['period_start'])
+        p_end_d = parse_date(active_imp['period_end'])
+    else:
+        today = datetime.date.today()
+        p_start_d = today - datetime.timedelta(days=today.weekday())
+        p_end_d = p_start_d + datetime.timedelta(days=6)
+
+    cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
+    cours_in_period = []
+    for c in cours_all:
+        d = parse_date(c.date)
+        if d and p_start_d and p_end_d and p_start_d <= d <= p_end_d:
+            cours_in_period.append((d, c))
+    cours_in_period.sort(key=lambda x: (x[0], clean(x[1].hd)))
+
+    absences = db.query(Absence).filter_by(actif=True).all()
+    retards = db.query(Retard).filter_by(actif=True).all()
+
+    abs_by_prof_date = {}
+    for a in absences:
+        abs_by_prof_date.setdefault((clean(a.prof).lower(), a.date), []).append(a)
+
+    ret_by_prof_date = {}
+    for r in retards:
+        ret_by_prof_date.setdefault((clean(r.prof).lower(), r.date), []).append(r)
+
+    rows_presents = []
+    rows_absents = []
+    rows_retards = []
+    rows_annules = []
+
+    for d, c in cours_in_period:
+        prof_name = clean(c.prof)
+        if not prof_name:
+            continue
+        c_fils = ", ".join(sorted(extract_filieres_from_group(c.groupe)))
+        day_name = JOURS_FR.get(d.weekday(), "")
+        horaire = fmt_h(c.hd, c.hf)
+
+        p_key = (prof_name.lower(), c.date)
+        matched_abs = abs_by_prof_date.get(p_key)
+        matched_ret = ret_by_prof_date.get(p_key)
+
+        if matched_abs:
+            cand = next((a for a in matched_abs if clean(a.groupe) in clean(c.groupe) or clean(c.groupe) in clean(a.groupe)), matched_abs[0])
+            motif_txt = clean(cand.motif) or "Absence déclarée"
+            if 'annul' in motif_txt.lower():
+                rows_annules.append([
+                    c.date, day_name, horaire, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle), motif_txt
+                ])
+            else:
+                rows_absents.append([
+                    c.date, day_name, horaire, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle), motif_txt
+                ])
+        elif matched_ret:
+            cand = next((r for r in matched_ret if clean(r.groupe) in clean(c.groupe) or clean(c.groupe) in clean(r.groupe)), matched_ret[0])
+            dur = clean(cand.duree_retard) or "Non précisé"
+            h_prev = clean(cand.heure_prevue) or clean(c.hd)
+            h_reel = clean(cand.heure_reelle) or "-"
+            rows_retards.append([
+                c.date, day_name, h_prev, h_reel, dur, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle)
+            ])
+        else:
+            rows_presents.append([
+                c.date, day_name, clean(c.hd), clean(c.hf), prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle), "Présent"
+            ])
+
+    wb = openpyxl.Workbook()
+
+    header_fill = PatternFill(start_color="0B4F6C", end_color="0B4F6C", fill_type="solid")
+    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    data_font = Font(name="Segoe UI", size=10)
+    zebra_fill = PatternFill(start_color="F7F9FA", end_color="F7F9FA", fill_type="solid")
+    thin_border = Border(
+        left=Side(style='thin', color='D0D7DE'),
+        right=Side(style='thin', color='D0D7DE'),
+        top=Side(style='thin', color='D0D7DE'),
+        bottom=Side(style='thin', color='D0D7DE')
+    )
+    center_align = Alignment(horizontal="center", vertical="center")
+    left_align = Alignment(horizontal="left", vertical="center")
+
+    sheets_config = [
+        ("Profs Présents", [
+            "Date", "Jour", "Début", "Fin", "Professeur", "Filière", "Groupe", "Module", "Salle", "Statut"
+        ], rows_presents),
+        ("Profs Absents", [
+            "Date", "Jour", "Horaire", "Professeur", "Filière", "Groupe", "Module", "Salle", "Motif d'absence"
+        ], rows_absents),
+        ("Profs en Retard", [
+            "Date", "Jour", "Heure Prévue", "Heure Réelle", "Durée Retard", "Professeur", "Filière", "Groupe", "Module", "Salle"
+        ], rows_retards),
+        ("Séances Annulées", [
+            "Date", "Jour", "Horaire", "Professeur", "Filière", "Groupe", "Module", "Salle", "Motif / Raison d'annulation"
+        ], rows_annules),
+    ]
+
+    for idx, (title, headers, data_rows) in enumerate(sheets_config):
+        if idx == 0:
+            ws = wb.active
+            ws.title = title
+        else:
+            ws = wb.create_sheet(title=title)
+
+        ws.views.sheetView[0].showGridLines = True
+        ws.row_dimensions[1].height = 28
+
+        for col_num, h_text in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=h_text)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align
+            cell.border = thin_border
+
+        for r_idx, row_values in enumerate(data_rows, 2):
+            ws.row_dimensions[r_idx].height = 20
+            is_even = (r_idx % 2 == 0)
+            for c_idx, val in enumerate(row_values, 1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                cell.font = data_font
+                cell.border = thin_border
+                if is_even:
+                    cell.fill = zebra_fill
+                if c_idx in (1, 2, 3, 4, 10):
+                    cell.alignment = center_align
+                else:
+                    cell.alignment = left_align
+
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val_str = str(cell.value or '')
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"Journal_ESITH_{p_start_d.strftime('%Y%m%d') if p_start_d else 'global'}.xlsx"
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename
+    )
 
 
 @app.route('/api/dashboard/import-append', methods=['POST'])
@@ -1050,12 +1576,14 @@ def event_to_dict(e):
         "id": e.id,
         "titre": clean(e.titre),
         "date": clean(e.date),
+        "date_fin": clean(getattr(e, 'date_fin', None)),
         "heure_debut": clean(e.heure_debut),
         "lieu": clean(e.lieu),
         "media_path": e.media_path,
         "media_type": e.media_type,
         "mode_affichage": e.mode_affichage or 'rotation',
-        "force_active": bool(e.force_active)
+        "force_active": bool(e.force_active),
+        "duree_affichage_sec": getattr(e, 'duree_affichage_sec', 10) or 10
     }
 
 
@@ -1082,6 +1610,7 @@ def create_event(current_user):
 
     titre = clean(data.get('titre'))
     date = normalize_date(data.get('date'))
+    date_fin = normalize_date(data.get('date_fin')) if data.get('date_fin') else None
     if not titre or not date:
         return jsonify({"error": "Titre et date obligatoires"}), 400
 
@@ -1098,6 +1627,12 @@ def create_event(current_user):
 
     force_active = str(data.get('force_active', '')).lower() in ('true', '1', 'yes', 'on')
 
+    try:
+        duree_sec = int(data.get('duree_affichage_sec', 10))
+    except (TypeError, ValueError):
+        duree_sec = 10
+    duree_sec = max(3, min(300, duree_sec))
+
     db = get_db()
     if force_active and mode_affichage == 'fige':
         db.query(Event).filter(Event.mode_affichage == 'fige').update({Event.force_active: False})
@@ -1105,12 +1640,14 @@ def create_event(current_user):
     e = Event(
         titre=titre,
         date=date,
+        date_fin=date_fin,
         heure_debut=normalize_time(data.get('heure_debut')),
         lieu=clean(data.get('lieu')),
         media_path=media_path,
         media_type=media_type,
         mode_affichage=mode_affichage,
         force_active=force_active,
+        duree_affichage_sec=duree_sec,
         actif=True
     )
     db.add(e)
@@ -1141,6 +1678,13 @@ def update_delete_event(current_user, id):
             e.titre = clean(data['titre'])
         if 'date' in data and data['date']:
             e.date = normalize_date(data['date'])
+        if 'date_fin' in data:
+            e.date_fin = normalize_date(data['date_fin']) if data['date_fin'] else None
+        if 'duree_affichage_sec' in data:
+            try:
+                e.duree_affichage_sec = max(3, min(300, int(data['duree_affichage_sec'])))
+            except (TypeError, ValueError):
+                pass
         if 'heure_debut' in data:
             e.heure_debut = normalize_time(data['heure_debut'])
         if 'lieu' in data:

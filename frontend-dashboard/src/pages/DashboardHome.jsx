@@ -21,10 +21,20 @@ const DashboardHome = () => {
   const [eventListKey, setEventListKey] = useState(0);
   const [activeAlertes, setActiveAlertes] = useState({ retards: [], absences: [], salles: [] });
   
+  // Active planning period (professors & filières dynamiques)
+  const [activePeriod, setActivePeriod] = useState({ active: false, professors: [], filieres: [] });
+  const [selectedFiliere, setSelectedFiliere] = useState('');
+
+  // Suivi des présences hebdomadaires & Recherche
+  const [attendanceSearch, setAttendanceSearch] = useState('');
+  const [attendanceData, setAttendanceData] = useState(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [exportingJournal, setExportingJournal] = useState(false);
+
   // Forms states
   const [raData, setRaData] = useState({ type: 'ABSENCE', groupe: '', heure: '', motif: '', prof: '' });
   const [salleData, setSalleData] = useState({ groupe: '', ancienneSalle: '', nouvelleSalle: '' });
-  const [eventData, setEventData] = useState({ titre: '', date: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false });
+  const [eventData, setEventData] = useState({ titre: '', date: '', date_fin: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false, duree_affichage_sec: 10 });
   const [eventFile, setEventFile] = useState(null);
   const eventFileInputRef = React.useRef(null);
   const [carbone, setCarbone] = useState(0);
@@ -38,6 +48,55 @@ const DashboardHome = () => {
   const showNotification = (text, type = 'success') => {
     setMessage(text);
     setMessageType(type);
+  };
+
+  const fetchActivePeriod = async () => {
+    try {
+      const res = await apiClient.get('/dashboard/active-period-data');
+      setActivePeriod(res.data || { active: false, professors: [], filieres: [] });
+    } catch (err) {
+      console.error('Erreur chargement période active:', err);
+    }
+  };
+
+  const fetchAttendance = async (prof = '', filiere = '') => {
+    try {
+      setAttendanceLoading(true);
+      const params = new URLSearchParams();
+      if (prof) params.append('prof', prof);
+      if (filiere) params.append('filiere', filiere);
+      const res = await apiClient.get(`/dashboard/attendance?${params.toString()}`);
+      setAttendanceData(res.data);
+    } catch (err) {
+      console.error('Erreur chargement présences:', err);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  const handleExportJournal = async () => {
+    try {
+      setExportingJournal(true);
+      const res = await apiClient.get('/export-journal', { responseType: 'blob' });
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const todayStr = new Date().toISOString().split('T')[0];
+      a.download = `Journal_Final_ESITH_${todayStr}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      showNotification('Journal final exporté avec succès (.xlsx)', 'success');
+    } catch (err) {
+      console.error('Erreur export journal:', err);
+      showNotification("Erreur lors du téléchargement du journal Excel", 'danger');
+    } finally {
+      setExportingJournal(false);
+    }
   };
 
   const fetchGroupes = async () => {
@@ -112,12 +171,18 @@ const DashboardHome = () => {
     };
     fetchGroupes();
     fetchCarbone();
+    fetchActivePeriod();
+    fetchAttendance();
   }, []);
 
   useEffect(() => {
     if (activeTab === 'alertes') {
       fetchAlertes();
       fetchGroupes();
+      fetchActivePeriod();
+      fetchAttendance(attendanceSearch, selectedFiliere);
+    } else if (activeTab === 'planning') {
+      fetchActivePeriod();
     } else if (activeTab === 'statistiques') {
       fetchStats();
     } else if (activeTab === 'journal') {
@@ -196,10 +261,12 @@ const DashboardHome = () => {
       const formData = new FormData();
       formData.append('titre', eventData.titre);
       formData.append('date', eventData.date);
+      if (eventData.date_fin) formData.append('date_fin', eventData.date_fin);
       formData.append('heure_debut', eventData.heure_debut || '');
       formData.append('lieu', eventData.lieu || '');
       formData.append('mode_affichage', eventData.mode_affichage || 'rotation');
       formData.append('force_active', eventData.force_active ? 'true' : 'false');
+      formData.append('duree_affichage_sec', eventData.duree_affichage_sec || 10);
       if (eventFile) {
         formData.append('file', eventFile);
       }
@@ -208,7 +275,7 @@ const DashboardHome = () => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       showNotification('Événement enregistré avec succès', 'success');
-      setEventData({ titre: '', date: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false });
+      setEventData({ titre: '', date: '', date_fin: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false, duree_affichage_sec: 10 });
       setEventFile(null);
       if (eventFileInputRef.current) eventFileInputRef.current.value = '';
       setEventListKey(prev => prev + 1); // Force EventList refresh
@@ -391,6 +458,15 @@ const DashboardHome = () => {
             </div>
           </div>
           <div className="d-flex align-items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-success d-flex align-items-center gap-1 shadow-sm"
+              onClick={handleExportJournal}
+              disabled={exportingJournal}
+              title="Télécharger le Journal Final multi-feuilles (.xlsx)"
+            >
+              {exportingJournal ? '⏳ Export...' : '📊 Exporter le Journal Final (.xlsx)'}
+            </button>
             <span className="dash-tab-badge d-none d-sm-inline-block">
               {activeTab === 'accueil' && '📊 Tableau de bord'}
               {activeTab === 'planning' && '📋 Imports Plannings'}
@@ -472,13 +548,34 @@ const DashboardHome = () => {
                       <h5 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Déclarer Retard ou Absence</h5>
                       <form onSubmit={handleRA}>
                         <div className="mb-3">
+                          <label className="form-label small fw-bold text-muted mb-1">Type de déclaration *</label>
                           <select className="dash-input w-100 form-select" value={raData.type} onChange={e=>setRaData({...raData, type: e.target.value})}>
                             <option value="ABSENCE">Absence Professeur</option>
                             <option value="RETARD">Retard Professeur</option>
                           </select>
                         </div>
                         <div className="mb-3">
-                          <input type="text" className="dash-input w-100" placeholder="Nom du professeur" required value={raData.prof} onChange={e=>setRaData({...raData, prof: e.target.value})} />
+                          <label className="form-label small fw-bold text-muted mb-1">Professeur concerné *</label>
+                          {activePeriod.active && activePeriod.professors.length > 0 ? (
+                            <select
+                              className="dash-input w-100 form-select"
+                              required
+                              value={raData.prof}
+                              onChange={e => setRaData({ ...raData, prof: e.target.value })}
+                            >
+                              <option value="">Sélectionner un professeur ({activePeriod.professors.length} programmés)</option>
+                              {activePeriod.professors.map(p => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="p-3 rounded border bg-light text-danger small">
+                              <strong>⚠️ Aucun planning importé pour la période en cours.</strong>
+                              <div className="text-muted mt-1">
+                                Importez le planning de la semaine dans l'onglet <strong>Imports Plannings</strong> pour sélectionner les professeurs actifs.
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <div className="mb-3">
                           {!raCustomGroup ? (
@@ -611,7 +708,7 @@ const DashboardHome = () => {
                   <div className="dash-card p-4">
                     <div className="card-header-accent" style={{ backgroundColor: '#2c3e50' }}></div>
                     <div className="card-body">
-                      <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+                      <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
                         <div>
                           <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>Alertes & Déclarations en cours d'affichage</h5>
                           <small className="text-muted">Uniquement les déclarations du jour ({new Date().toLocaleDateString('fr-FR')})</small>
@@ -621,15 +718,53 @@ const DashboardHome = () => {
                         </button>
                       </div>
 
+                      {/* Filtre par filière issu du planning importé */}
+                      <div className="d-flex align-items-center gap-2 mb-4 p-2 bg-light rounded border flex-wrap">
+                        <span className="small fw-bold text-muted">🏷️ Filtrer par Filière :</span>
+                        {activePeriod.active && activePeriod.filieres.length > 0 ? (
+                          <div className="d-flex align-items-center gap-2">
+                            <select
+                              className="form-select form-select-sm"
+                              style={{ minWidth: '180px' }}
+                              value={selectedFiliere}
+                              onChange={e => setSelectedFiliere(e.target.value)}
+                            >
+                              <option value="">Toutes les filières ({activePeriod.filieres.length})</option>
+                              {activePeriod.filieres.map(f => (
+                                <option key={f} value={f}>{f}</option>
+                              ))}
+                            </select>
+                            {selectedFiliere && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-secondary"
+                                onClick={() => setSelectedFiliere('')}
+                              >
+                                ✕ Réinitialiser
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="badge bg-secondary">Aucune filière dans le planning actif</span>
+                        )}
+                        {selectedFiliere && (
+                          <span className="badge bg-primary ms-auto">Filière sélectionnée : {selectedFiliere}</span>
+                        )}
+                      </div>
+
                       <div className="dash-alertes-grid">
                         {/* Retards */}
                         <div>
-                          <h6 className="fw-bold text-warning mb-3">⏱️ Retards Professeurs ({activeAlertes.retards.length})</h6>
-                          {activeAlertes.retards.length === 0 ? (
-                            <p className="text-muted small">Aucun retard déclaré</p>
+                          <h6 className="fw-bold text-warning mb-3">
+                            ⏱️ Retards Professeurs ({activeAlertes.retards.filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                          </h6>
+                          {activeAlertes.retards.filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                            <p className="text-muted small">Aucun retard déclaré {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
-                              {activeAlertes.retards.map(r => (
+                              {activeAlertes.retards
+                                .filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .map(r => (
                                 <li key={r.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
                                     <span className="fw-bold">{r.prof}</span> <span className="badge bg-secondary ms-1">{r.groupe}</span>
@@ -644,12 +779,16 @@ const DashboardHome = () => {
 
                         {/* Absences */}
                         <div>
-                          <h6 className="fw-bold text-danger mb-3">🚫 Absences Professeurs ({activeAlertes.absences.length})</h6>
-                          {activeAlertes.absences.length === 0 ? (
-                            <p className="text-muted small">Aucune absence déclarée</p>
+                          <h6 className="fw-bold text-danger mb-3">
+                            🚫 Absences Professeurs ({activeAlertes.absences.filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                          </h6>
+                          {activeAlertes.absences.filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                            <p className="text-muted small">Aucune absence déclarée {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
-                              {activeAlertes.absences.map(a => (
+                              {activeAlertes.absences
+                                .filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .map(a => (
                                 <li key={a.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
                                     <span className="fw-bold">{a.prof}</span> <span className="badge bg-secondary ms-1">{a.groupe}</span>
@@ -664,12 +803,16 @@ const DashboardHome = () => {
 
                         {/* Changements de Salle */}
                         <div>
-                          <h6 className="fw-bold mb-3" style={{ color: '#145a32' }}>📍 Changements de Salle ({activeAlertes.salles.length})</h6>
-                          {activeAlertes.salles.length === 0 ? (
-                            <p className="text-muted small">Aucun changement de salle</p>
+                          <h6 className="fw-bold mb-3" style={{ color: '#145a32' }}>
+                            📍 Changements de Salle ({activeAlertes.salles.filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                          </h6>
+                          {activeAlertes.salles.filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                            <p className="text-muted small">Aucun changement de salle {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
-                              {activeAlertes.salles.map(s => (
+                              {activeAlertes.salles
+                                .filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .map(s => (
                                 <li key={s.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
                                     <span className="badge me-1" style={{ backgroundColor: '#145a32', color: '#ffffff' }}>{s.groupe}</span>
@@ -684,6 +827,190 @@ const DashboardHome = () => {
                           )}
                         </div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SUIVI DES PRÉSENCES HEBDOMADAIRES DES PROFESSEURS & RECHERCHE */}
+                <div className="col-12 mt-4">
+                  <div className="dash-card p-4">
+                    <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
+                    <div className="card-body">
+                      <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                        <div>
+                          <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>
+                            📅 Suivi des Présences Hebdomadaires des Professeurs
+                          </h5>
+                          <small className="text-muted">
+                            Planning prévu (Excel) vs Absences, Retards et Annulations
+                            {activePeriod.period_start && activePeriod.period_end ? ` (${activePeriod.period_start} au ${activePeriod.period_end})` : ''}
+                          </small>
+                        </div>
+                        <div className="d-flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-success d-flex align-items-center gap-1 shadow-sm"
+                            onClick={handleExportJournal}
+                            disabled={exportingJournal}
+                          >
+                            📊 Exporter le Journal Final (.xlsx)
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-secondary"
+                            onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
+                          >
+                            🔄 Actualiser
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Barre de recherche par nom de professeur */}
+                      <div className="row g-2 mb-4 align-items-center">
+                        <div className="col-12 col-md-6 col-lg-5">
+                          <div className="input-group">
+                            <span className="input-group-text bg-white border-end-0">🔍</span>
+                            <input
+                              type="text"
+                              className="dash-input form-control border-start-0"
+                              placeholder="Rechercher un professeur (ex: OUBAD, AZHAR...)"
+                              value={attendanceSearch}
+                              onChange={e => setAttendanceSearch(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  fetchAttendance(attendanceSearch, selectedFiliere);
+                                }
+                              }}
+                            />
+                            {attendanceSearch && (
+                              <button
+                                className="btn btn-outline-secondary"
+                                type="button"
+                                onClick={() => {
+                                  setAttendanceSearch('');
+                                  fetchAttendance('', selectedFiliere);
+                                }}
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="col-12 col-md-3 col-lg-3">
+                          <button
+                            type="button"
+                            className="btn-pistachio w-100 py-2"
+                            onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
+                          >
+                            Rechercher Présences
+                          </button>
+                        </div>
+                        {activePeriod.active && activePeriod.professors.length > 0 && (
+                          <div className="col-12 col-md-3 col-lg-4 text-md-end">
+                            <select
+                              className="form-select form-select-sm d-inline-block w-auto"
+                              value={attendanceSearch}
+                              onChange={e => {
+                                setAttendanceSearch(e.target.value);
+                                fetchAttendance(e.target.value, selectedFiliere);
+                              }}
+                            >
+                              <option value="">Sélection rapide professeur...</option>
+                              {activePeriod.professors.map(p => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Résultats du suivi hebdomadaire */}
+                      {attendanceLoading ? (
+                        <div className="text-center py-4 text-muted">
+                          <div className="spinner-border spinner-border-sm me-2" role="status"></div>
+                          Chargement des présences...
+                        </div>
+                      ) : attendanceData && attendanceData.professors && attendanceData.professors.length > 0 ? (
+                        <div className="d-flex flex-column gap-3">
+                          {attendanceData.professors.map((p, idx) => (
+                            <div key={idx} className="p-3 border rounded bg-light">
+                              <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                                <div>
+                                  <h6 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                                    👨‍🏫 {p.prof}
+                                  </h6>
+                                  {/* Résumé textuel jour par jour : Prof. X — Lundi: Présent, Mercredi: Présent, etc. */}
+                                  <div className="badge bg-primary text-wrap text-start p-2 fs-6">
+                                    {p.summary_text}
+                                  </div>
+                                </div>
+                                <div className="d-flex gap-2 align-items-center flex-wrap">
+                                  <span className="badge bg-secondary">{p.total_sessions} séance(s)</span>
+                                  <span className="badge bg-success">{p.presents} Présent(s)</span>
+                                  {p.absents > 0 && <span className="badge bg-danger">{p.absents} Absent(s)</span>}
+                                  {p.retards > 0 && <span className="badge bg-warning text-dark">{p.retards} Retard(s)</span>}
+                                  {p.annules > 0 && <span className="badge bg-dark">{p.annules} Annulé(s)</span>}
+                                </div>
+                              </div>
+
+                              {/* Détail jour par jour */}
+                              <div className="table-responsive mt-3 bg-white rounded border">
+                                <table className="table table-sm table-hover align-middle mb-0">
+                                  <thead className="table-light">
+                                    <tr>
+                                      <th>Jour / Date</th>
+                                      <th>Horaire</th>
+                                      <th>Groupe / Filière</th>
+                                      <th>Module</th>
+                                      <th>Salle</th>
+                                      <th>Statut</th>
+                                      <th>Détail / Motif</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {p.sessions.map((sess, sIdx) => (
+                                      <tr key={sIdx}>
+                                        <td className="fw-semibold">
+                                          {sess.day_name} <small className="text-muted">({sess.date})</small>
+                                        </td>
+                                        <td>{sess.horaire}</td>
+                                        <td>
+                                          <span className="badge bg-light text-dark border me-1">{sess.groupe}</span>
+                                          {sess.filieres.map(f => (
+                                            <span key={f} className="badge bg-secondary me-1">{f}</span>
+                                          ))}
+                                        </td>
+                                        <td>{sess.module}</td>
+                                        <td>{sess.salle}</td>
+                                        <td>
+                                          <span className={`badge ${
+                                            sess.status === 'Présent' ? 'bg-success' :
+                                            sess.status === 'Absent' ? 'bg-danger' :
+                                            sess.status === 'En retard' ? 'bg-warning text-dark' :
+                                            'bg-dark'
+                                          }`}>
+                                            {sess.status}
+                                          </span>
+                                        </td>
+                                        <td className="small text-muted">{sess.details || '-'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : attendanceData ? (
+                        <div className="text-muted p-3 bg-light rounded text-center small">
+                          Aucun professeur ne correspond à la recherche "{attendanceSearch}".
+                        </div>
+                      ) : (
+                        <div className="text-muted p-4 bg-light rounded text-center small">
+                          Entrez le nom d'un professeur ou cliquez sur "Rechercher Présences" pour afficher le récapitulatif jour par jour de la semaine.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -707,14 +1034,23 @@ const DashboardHome = () => {
                       <input type="text" className="dash-input w-100" placeholder="Ex: Cérémonie d'accueil des invités" required value={eventData.titre} onChange={e=>setEventData({...eventData, titre: e.target.value})}/>
                     </div>
                     <div className="col-12 col-sm-6 col-md-3">
-                      <label className="form-label small fw-bold text-muted mb-1">Date *</label>
+                      <label className="form-label small fw-bold text-muted mb-1">Date de début *</label>
                       <input type="date" className="dash-input w-100" required value={eventData.date} onChange={e=>setEventData({...eventData, date: e.target.value})}/>
+                    </div>
+                    <div className="col-12 col-sm-6 col-md-3">
+                      <label className="form-label small fw-bold text-muted mb-1">Date de fin (Optionnel)</label>
+                      <input type="date" className="dash-input w-100" value={eventData.date_fin} onChange={e=>setEventData({...eventData, date_fin: e.target.value})}/>
+                      <small className="text-muted d-block mt-1">Masquage automatique dès expiration.</small>
                     </div>
                     <div className="col-12 col-sm-6 col-md-3">
                       <label className="form-label small fw-bold text-muted mb-1">Heure de début (Optionnel)</label>
                       <input type="time" className="dash-input w-100" value={eventData.heure_debut} onChange={e=>setEventData({...eventData, heure_debut: e.target.value})}/>
                     </div>
-                    <div className="col-12 col-md-6">
+                    <div className="col-12 col-sm-6 col-md-3">
+                      <label className="form-label small fw-bold text-muted mb-1">Durée affichage TV (sec)</label>
+                      <input type="number" min="3" max="300" className="dash-input w-100" value={eventData.duree_affichage_sec} onChange={e=>setEventData({...eventData, duree_affichage_sec: Number(e.target.value) || 10})}/>
+                    </div>
+                    <div className="col-12 col-md-12">
                       <label className="form-label small fw-bold text-muted mb-1">Lieu (Optionnel)</label>
                       <input type="text" className="dash-input w-100" placeholder="Ex: Grand Amphi, Salle de Conférence..." value={eventData.lieu} onChange={e=>setEventData({...eventData, lieu: e.target.value})}/>
                     </div>
