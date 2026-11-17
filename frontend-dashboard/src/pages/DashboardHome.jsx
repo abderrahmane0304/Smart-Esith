@@ -251,6 +251,7 @@ const DashboardHome = () => {
       fetchAttendance(attendanceSearch, selectedFiliere);
     } else if (activeTab === 'planning') {
       fetchActivePeriod();
+    } else if (activeTab === 'sauvegardes') {
       fetchBackups();
     } else if (activeTab === 'statistiques') {
       fetchStats();
@@ -474,6 +475,17 @@ const DashboardHome = () => {
             </button>
           )}
 
+          {canAccess(['DEE']) && (
+            <button 
+              onClick={() => selectTab('sauvegardes')} 
+              className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'sauvegardes' ? 'active' : ''}`}
+              title="Sauvegardes & Archives (3 mois)"
+            >
+              <span className="dash-menu-icon me-2">📦</span>
+              <span className="dash-menu-text">Sauvegardes</span>
+            </button>
+          )}
+
           {canAccess(['DEE', 'DRE']) && (
             <button 
               onClick={() => selectTab('evenements')} 
@@ -583,6 +595,7 @@ const DashboardHome = () => {
               {activeTab === 'planning' && '📋 Imports Plannings'}
               {activeTab === 'presences' && '👨‍🏫 Suivi des Présences'}
               {activeTab === 'alertes' && '🔔 Alertes & Salles'}
+              {activeTab === 'sauvegardes' && '📦 Sauvegardes & Archives'}
               {activeTab === 'evenements' && '📅 Événements'}
               {activeTab === 're' && '🏢 Relations Entreprises'}
               {activeTab === 'fc' && '📚 Formation Continue'}
@@ -636,10 +649,10 @@ const DashboardHome = () => {
             </div>
           )}
 
-          {/* PLANNINGS & ARCHIVES 3 MOIS */}
+          {/* PLANNINGS */}
           {activeTab === 'planning' && canAccess(['DEE']) && (
             <div className="col-12">
-              <div className="dash-card p-4 mb-4">
+              <div className="dash-card p-4">
                 <div className="card-header-accent" style={{ backgroundColor: '#8e44ad' }}></div>
                 <div className="card-body">
                   <h4 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Plannings Formation Initiale</h4>
@@ -650,8 +663,12 @@ const DashboardHome = () => {
                   />
                 </div>
               </div>
+            </div>
+          )}
 
-              {/* SECTION SAUVEGARDES & ARCHIVES (RÉTENTION 3 MOIS) */}
+          {/* SAUVEGARDES & ARCHIVES 3 MOIS (Feuille Seule / Onglet Dédié) */}
+          {activeTab === 'sauvegardes' && canAccess(['DEE']) && (
+            <div className="col-12">
               <div className="dash-card p-4">
                 <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
                 <div className="card-body">
