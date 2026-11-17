@@ -10,8 +10,8 @@ const cycleNames = {
     're': 'RELATIONS ENTREPRISES',
     'event': 'ACCUEIL & ÉVÉNEMENT'
 };
-const SPLASH_MS = 3000;       // 3 s pour la page d'accueil (selon demande utilisateur)
-const ROTATION_MS = 6000;     // 6 s par page de cours (Formation Initiale)
+const SPLASH_MS = 6000;       // 6 s pour la page d'accueil (selon demande utilisateur)
+const ROTATION_MS = 10000;    // 10 s par cycle / page de cours (selon demande utilisateur)
 const FC_ROTATION_MS = 10000; // 10 s pour la Formation Continue (selon demande utilisateur)
 const EVENT_ROTATION_MS = 10000; // 10 s pour l'affiche d'événement en rotation
 const REFRESH_MS = 60000;    // rafraîchissement des données : 60 s
@@ -321,12 +321,12 @@ function stepRotation() {
         if (!isShowingSplash) {
             showSplashScreen();
         }
-        scheduleNextRotation(5000);
+        scheduleNextRotation(SPLASH_MS);
         return;
     }
 
     if (isShowingSplash) {
-        // Fin de l'affichage de la page d'accueil (3 s) -> afficher le 1er cycle actif
+        // Fin de l'affichage de la page d'accueil (6 s) -> afficher le 1er cycle actif
         showMainContent();
         currentCycleIndex = active[0];
         currentCyclePageIndex = 0;
@@ -354,7 +354,7 @@ function stepRotation() {
         scheduleNextRotation(getCycleDuration(cycles[currentCycleIndex]));
     } else {
         // Tous les cycles de la boucle ont été affichés !
-        // Réafficher la page d'accueil pour 3 secondes
+        // Réafficher la page d'accueil pour 6 secondes
         showSplashScreen();
     }
 }
