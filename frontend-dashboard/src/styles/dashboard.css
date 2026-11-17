@@ -62,18 +62,9 @@ body {
 
 .dash-sidebar.collapsed .sidebar-brand-text,
 .dash-sidebar.collapsed .dash-menu-text,
-.dash-sidebar.collapsed .btn-logout-text {
-  display: none !important;
-}
-
+.dash-sidebar.collapsed .btn-logout-text,
 .dash-sidebar.collapsed .role-badge {
-  padding: 3px 6px;
-  font-size: 0.65rem;
-  letter-spacing: 0;
-  max-width: 58px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none !important;
 }
 
 .dash-sidebar.collapsed .sidebar-logo {
@@ -241,10 +232,17 @@ body {
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+  user-select: none;
 }
 
 .dash-hamburger:hover {
   background: #f0f7f9;
+  border-color: #0B4F6C;
+  transform: translateY(-1px);
+}
+
+.dash-hamburger:active {
+  transform: scale(0.95);
 }
 
 .dash-tab-badge {
@@ -269,11 +267,18 @@ body {
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+  user-select: none;
 }
 
 .sidebar-toggle-btn:hover {
   background: #e2ebf0;
   color: #0B4F6C;
+  border-color: #0B4F6C;
+  transform: scale(1.05);
+}
+
+.sidebar-toggle-btn:active {
+  transform: scale(0.95);
 }
 
 .dash-scroll-content {

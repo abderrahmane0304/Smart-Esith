@@ -246,6 +246,8 @@ const DashboardHome = () => {
       fetchAlertes();
       fetchGroupes();
       fetchActivePeriod();
+    } else if (activeTab === 'presences') {
+      fetchActivePeriod();
       fetchAttendance(attendanceSearch, selectedFiliere);
     } else if (activeTab === 'planning') {
       fetchActivePeriod();
@@ -375,34 +377,58 @@ const DashboardHome = () => {
 
       {/* Sidebar */}
       <aside className={`dash-sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
-        <div className="p-3 text-center border-bottom flex-shrink-0 bg-white position-relative">
-          <div className="d-flex align-items-center justify-content-between mb-2">
-            <span className="d-none d-lg-block" style={{ width: '28px' }}></span>
-            <img 
-              src="/static/esith-couleur-600x315-cropped-2.png" 
-              alt="ESITH" 
-              className="sidebar-logo mx-auto" 
-              style={{ height: '65px', objectFit: 'contain', transition: 'height 0.2s' }} 
-            />
-            {/* Desktop collapse toggle */}
-            <button 
-              type="button" 
-              className="sidebar-toggle-btn d-none d-lg-inline-flex" 
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              title={sidebarCollapsed ? "Agrandir le menu" : "Réduire le menu"}
-              aria-label={sidebarCollapsed ? "Agrandir le menu" : "Réduire le menu"}
-            >
-              {sidebarCollapsed ? '▶' : '◀'}
-            </button>
-            {/* Mobile close button */}
-            <button 
-              type="button" 
-              className="btn-close d-lg-none" 
-              onClick={() => setMobileOpen(false)}
-              aria-label="Fermer le menu"
-            />
-          </div>
-          <div className="role-badge mx-auto" style={{ width: 'fit-content' }}>{user.role}</div>
+        <div className={`text-center border-bottom flex-shrink-0 bg-white position-relative ${sidebarCollapsed ? 'p-2' : 'p-3'}`}>
+          {sidebarCollapsed ? (
+            <div className="d-flex flex-column align-items-center gap-2 py-1">
+              <button 
+                type="button" 
+                className="sidebar-toggle-btn shadow-sm" 
+                onClick={() => setSidebarCollapsed(false)}
+                title="Agrandir / Ouvrir le menu"
+                aria-label="Agrandir / Ouvrir le menu"
+                style={{ width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ▶
+              </button>
+              <img 
+                src="/static/esith-couleur-600x315-cropped-2.png" 
+                alt="ESITH" 
+                className="sidebar-logo" 
+                style={{ height: '30px', maxWidth: '48px', objectFit: 'contain' }} 
+              />
+            </div>
+          ) : (
+            <>
+              <div className="d-flex align-items-center justify-content-between mb-2">
+                <span className="d-none d-lg-block" style={{ width: '28px' }}></span>
+                <img 
+                  src="/static/esith-couleur-600x315-cropped-2.png" 
+                  alt="ESITH" 
+                  className="sidebar-logo mx-auto" 
+                  style={{ height: '65px', objectFit: 'contain', transition: 'height 0.2s' }} 
+                />
+                {/* Desktop collapse toggle */}
+                <button 
+                  type="button" 
+                  className="sidebar-toggle-btn d-none d-lg-inline-flex shadow-sm" 
+                  onClick={() => setSidebarCollapsed(true)}
+                  title="Fermer / Réduire le menu"
+                  aria-label="Fermer / Réduire le menu"
+                  style={{ width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  ◀
+                </button>
+                {/* Mobile close button */}
+                <button 
+                  type="button" 
+                  className="btn-close d-lg-none" 
+                  onClick={() => setMobileOpen(false)}
+                  aria-label="Fermer le menu"
+                />
+              </div>
+              <div className="role-badge mx-auto" style={{ width: 'fit-content' }}>{user.role}</div>
+            </>
+          )}
         </div>
         
         <div className="list-group list-group-flush dash-menu-list p-2 p-lg-3 gap-2">
@@ -423,6 +449,17 @@ const DashboardHome = () => {
             >
               <span className="dash-menu-icon me-2">📋</span>
               <span className="dash-menu-text">Imports Plannings</span>
+            </button>
+          )}
+
+          {canAccess(['Scolarite', 'DEE']) && (
+            <button 
+              onClick={() => selectTab('presences')} 
+              className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'presences' ? 'active' : ''}`}
+              title="Suivi des Présences Professeurs"
+            >
+              <span className="dash-menu-icon me-2">👨‍🏫</span>
+              <span className="dash-menu-text">Suivi Présences</span>
             </button>
           )}
 
@@ -508,12 +545,19 @@ const DashboardHome = () => {
       <main className="dash-main">
         <header className="dash-topbar">
           <div className="d-flex align-items-center gap-3">
-            {/* Mobile Hamburger Button */}
+            {/* Bouton pour fermer / ouvrir la barre latérale (Desktop & Mobile) */}
             <button 
               type="button" 
-              className="dash-hamburger d-lg-none" 
-              onClick={() => setMobileOpen(true)}
-              aria-label="Ouvrir le menu"
+              className="dash-hamburger shadow-sm" 
+              onClick={() => {
+                if (window.innerWidth < 992) {
+                  setMobileOpen(prev => !prev);
+                } else {
+                  setSidebarCollapsed(prev => !prev);
+                }
+              }}
+              title={sidebarCollapsed ? "Agrandir / Ouvrir le menu" : "Fermer / Réduire le menu"}
+              aria-label="Basculer le menu"
             >
               ☰
             </button>
@@ -537,6 +581,7 @@ const DashboardHome = () => {
             <span className="dash-tab-badge d-none d-sm-inline-block">
               {activeTab === 'accueil' && '📊 Tableau de bord'}
               {activeTab === 'planning' && '📋 Imports Plannings'}
+              {activeTab === 'presences' && '👨‍🏫 Suivi des Présences'}
               {activeTab === 'alertes' && '🔔 Alertes & Salles'}
               {activeTab === 'evenements' && '📅 Événements'}
               {activeTab === 're' && '🏢 Relations Entreprises'}
@@ -1039,189 +1084,221 @@ const DashboardHome = () => {
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
 
-                {/* SUIVI DES PRÉSENCES HEBDOMADAIRES DES PROFESSEURS & RECHERCHE */}
-                <div className="col-12 mt-4">
-                  <div className="dash-card p-4">
-                    <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
-                    <div className="card-body">
-                      <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                        <div>
-                          <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>
-                            📅 Suivi des Présences Hebdomadaires des Professeurs
-                          </h5>
-                          <small className="text-muted">
-                            Planning prévu (Excel) vs Absences, Retards et Annulations
-                            {activePeriod.period_start && activePeriod.period_end ? ` (${activePeriod.period_start} au ${activePeriod.period_end})` : ''}
-                          </small>
-                        </div>
-                        <div className="d-flex gap-2">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-success d-flex align-items-center gap-1 shadow-sm"
-                            onClick={handleExportJournal}
-                            disabled={exportingJournal}
-                          >
-                            📊 Exporter le Journal Final (.xlsx)
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-secondary"
-                            onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
-                          >
-                            🔄 Actualiser
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Barre de recherche par nom de professeur */}
-                      <div className="row g-2 mb-4 align-items-center">
-                        <div className="col-12 col-md-6 col-lg-5">
-                          <div className="input-group">
-                            <span className="input-group-text bg-white border-end-0">🔍</span>
-                            <input
-                              type="text"
-                              className="dash-input form-control border-start-0"
-                              placeholder="Rechercher un professeur (ex: OUBAD, AZHAR...)"
-                              value={attendanceSearch}
-                              onChange={e => setAttendanceSearch(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  fetchAttendance(attendanceSearch, selectedFiliere);
-                                }
-                              }}
-                            />
-                            {attendanceSearch && (
-                              <button
-                                className="btn btn-outline-secondary"
-                                type="button"
-                                onClick={() => {
-                                  setAttendanceSearch('');
-                                  fetchAttendance('', selectedFiliere);
-                                }}
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="col-12 col-md-3 col-lg-3">
-                          <button
-                            type="button"
-                            className="btn-pistachio w-100 py-2"
-                            onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
-                          >
-                            Rechercher Présences
-                          </button>
-                        </div>
-                        {activePeriod.active && activePeriod.professors.length > 0 && (
-                          <div className="col-12 col-md-3 col-lg-4 text-md-end">
-                            <select
-                              className="form-select form-select-sm d-inline-block w-auto"
-                              value={attendanceSearch}
-                              onChange={e => {
-                                setAttendanceSearch(e.target.value);
-                                fetchAttendance(e.target.value, selectedFiliere);
-                              }}
-                            >
-                              <option value="">Sélection rapide professeur...</option>
-                              {activePeriod.professors.map(p => (
-                                <option key={p} value={p}>{p}</option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Résultats du suivi hebdomadaire */}
-                      {attendanceLoading ? (
-                        <div className="text-center py-4 text-muted">
-                          <div className="spinner-border spinner-border-sm me-2" role="status"></div>
-                          Chargement des présences...
-                        </div>
-                      ) : attendanceData && attendanceData.professors && attendanceData.professors.length > 0 ? (
-                        <div className="d-flex flex-column gap-3">
-                          {attendanceData.professors.map((p, idx) => (
-                            <div key={idx} className="p-3 border rounded bg-light">
-                              <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-                                <div>
-                                  <h6 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>
-                                    👨‍🏫 {p.prof}
-                                  </h6>
-                                  {/* Résumé textuel jour par jour : Prof. X — Lundi: Présent, Mercredi: Présent, etc. */}
-                                  <div className="badge bg-primary text-wrap text-start p-2 fs-6">
-                                    {p.summary_text}
-                                  </div>
-                                </div>
-                                <div className="d-flex gap-2 align-items-center flex-wrap">
-                                  <span className="badge bg-secondary">{p.total_sessions} séance(s)</span>
-                                  <span className="badge bg-success">{p.presents} Présent(s)</span>
-                                  {p.absents > 0 && <span className="badge bg-danger">{p.absents} Absent(s)</span>}
-                                  {p.retards > 0 && <span className="badge bg-warning text-dark">{p.retards} Retard(s)</span>}
-                                  {p.annules > 0 && <span className="badge bg-dark">{p.annules} Annulé(s)</span>}
-                                </div>
-                              </div>
-
-                              {/* Détail jour par jour */}
-                              <div className="table-responsive mt-3 bg-white rounded border">
-                                <table className="table table-sm table-hover align-middle mb-0">
-                                  <thead className="table-light">
-                                    <tr>
-                                      <th>Jour / Date</th>
-                                      <th>Horaire</th>
-                                      <th>Groupe / Filière</th>
-                                      <th>Module</th>
-                                      <th>Salle</th>
-                                      <th>Statut</th>
-                                      <th>Détail / Motif</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {p.sessions.map((sess, sIdx) => (
-                                      <tr key={sIdx}>
-                                        <td className="fw-semibold">
-                                          {sess.day_name} <small className="text-muted">({sess.date})</small>
-                                        </td>
-                                        <td>{sess.horaire}</td>
-                                        <td>
-                                          <span className="badge bg-light text-dark border me-1">{sess.groupe}</span>
-                                          {sess.filieres.map(f => (
-                                            <span key={f} className="badge bg-secondary me-1">{f}</span>
-                                          ))}
-                                        </td>
-                                        <td>{sess.module}</td>
-                                        <td>{sess.salle}</td>
-                                        <td>
-                                          <span className={`badge ${
-                                            sess.status === 'Présent' ? 'bg-success' :
-                                            sess.status === 'Absent' ? 'bg-danger' :
-                                            sess.status === 'En retard' ? 'bg-warning text-dark' :
-                                            'bg-dark'
-                                          }`}>
-                                            {sess.status}
-                                          </span>
-                                        </td>
-                                        <td className="small text-muted">{sess.details || '-'}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : attendanceData ? (
-                        <div className="text-muted p-3 bg-light rounded text-center small">
-                          Aucun professeur ne correspond à la recherche "{attendanceSearch}".
-                        </div>
-                      ) : (
-                        <div className="text-muted p-4 bg-light rounded text-center small">
-                          Entrez le nom d'un professeur ou cliquez sur "Rechercher Présences" pour afficher le récapitulatif jour par jour de la semaine.
-                        </div>
-                      )}
+          {/* SUIVI DES PRÉSENCES HEBDOMADAIRES DES PROFESSEURS (Feuille Seule / Onglet Dédié) */}
+          {activeTab === 'presences' && canAccess(['Scolarite', 'DEE']) && (
+            <div className="col-12">
+              <div className="dash-card p-4">
+                <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
+                <div className="card-body">
+                  <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <div>
+                      <h4 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                        👨‍🏫 Suivi des Présences Hebdomadaires des Professeurs
+                      </h4>
+                      <p className="text-muted small mb-0">
+                        Comparaison automatique du planning prévu (Excel importé) vs Absences, Retards et Annulations déclarés.
+                        {activePeriod.period_start && activePeriod.period_end ? ` Période active : ${activePeriod.period_start} au ${activePeriod.period_end}` : ''}
+                      </p>
+                    </div>
+                    <div className="d-flex gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-success d-flex align-items-center gap-1 shadow-sm"
+                        onClick={handleExportJournal}
+                        disabled={exportingJournal}
+                        title="Télécharger le Journal Final multi-feuilles (.xlsx)"
+                      >
+                        <span>📊</span>
+                        <span>{exportingJournal ? 'Export...' : 'Exporter le Journal Final (.xlsx)'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1"
+                        onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
+                        title="Actualiser les données de présence"
+                      >
+                        <span>🔄</span>
+                        <span>Actualiser</span>
+                      </button>
                     </div>
                   </div>
+
+                  {/* Barre de recherche et filtres */}
+                  <div className="row g-2 mb-4 align-items-center bg-light p-3 rounded border">
+                    <div className="col-12 col-md-5">
+                      <label className="form-label small fw-semibold text-muted mb-1">Recherche par professeur :</label>
+                      <div className="input-group">
+                        <span className="input-group-text bg-white border-end-0">🔍</span>
+                        <input
+                          type="text"
+                          className="dash-input form-control border-start-0"
+                          placeholder="Nom du professeur (ex: OUBAD, AZHAR...)"
+                          value={attendanceSearch}
+                          onChange={e => setAttendanceSearch(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              fetchAttendance(attendanceSearch, selectedFiliere);
+                            }
+                          }}
+                        />
+                        {attendanceSearch && (
+                          <button
+                            className="btn btn-outline-secondary"
+                            type="button"
+                            onClick={() => {
+                              setAttendanceSearch('');
+                              fetchAttendance('', selectedFiliere);
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {activePeriod.active && activePeriod.professors.length > 0 && (
+                      <div className="col-12 col-md-3">
+                        <label className="form-label small fw-semibold text-muted mb-1">Sélection rapide :</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={attendanceSearch}
+                          onChange={e => {
+                            setAttendanceSearch(e.target.value);
+                            fetchAttendance(e.target.value, selectedFiliere);
+                          }}
+                        >
+                          <option value="">Tous les professeurs...</option>
+                          {activePeriod.professors.map(p => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {activePeriod.active && activePeriod.filieres.length > 0 && (
+                      <div className="col-12 col-md-2">
+                        <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière :</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={selectedFiliere}
+                          onChange={e => {
+                            setSelectedFiliere(e.target.value);
+                            fetchAttendance(attendanceSearch, e.target.value);
+                          }}
+                        >
+                          <option value="">Toutes filières</option>
+                          {activePeriod.filieres.map(f => (
+                            <option key={f} value={f}>{f}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="col-12 col-md-2 d-flex align-items-end">
+                      <button
+                        type="button"
+                        className="btn-pistachio w-100 py-2 mt-auto"
+                        onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
+                      >
+                        Rechercher
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Résultats du suivi hebdomadaire */}
+                  {attendanceLoading ? (
+                    <div className="text-center py-5 text-muted">
+                      <div className="spinner-border text-primary me-2" role="status"></div>
+                      <div className="mt-2">Chargement du récapitulatif des présences...</div>
+                    </div>
+                  ) : attendanceData && attendanceData.professors && attendanceData.professors.length > 0 ? (
+                    <div className="d-flex flex-column gap-3">
+                      {attendanceData.professors.map((p, idx) => (
+                        <div key={idx} className="p-3 border rounded bg-light shadow-sm">
+                          <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                            <div>
+                              <h5 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                                👨‍🏫 {p.prof}
+                              </h5>
+                              <div className="badge bg-primary text-wrap text-start p-2 fs-6 mt-1 shadow-sm">
+                                {p.summary_text}
+                              </div>
+                            </div>
+                            <div className="d-flex gap-2 align-items-center flex-wrap">
+                              <span className="badge bg-secondary p-2">{p.total_sessions} séance(s)</span>
+                              <span className="badge bg-success p-2">{p.presents} Présent(s)</span>
+                              {p.absents > 0 && <span className="badge bg-danger p-2">{p.absents} Absent(s)</span>}
+                              {p.retards > 0 && <span className="badge bg-warning text-dark p-2">{p.retards} Retard(s)</span>}
+                              {p.annules > 0 && <span className="badge bg-dark p-2">{p.annules} Annulé(s)</span>}
+                            </div>
+                          </div>
+
+                          {/* Détail jour par jour */}
+                          <div className="table-responsive mt-3 bg-white rounded border">
+                            <table className="table table-sm table-hover align-middle mb-0">
+                              <thead className="table-light">
+                                <tr>
+                                  <th>Jour / Date</th>
+                                  <th>Horaire</th>
+                                  <th>Groupe / Filière</th>
+                                  <th>Module</th>
+                                  <th>Salle</th>
+                                  <th>Statut</th>
+                                  <th>Détail / Motif</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {p.sessions.map((sess, sIdx) => (
+                                  <tr key={sIdx}>
+                                    <td className="fw-semibold">
+                                      {sess.day_name} <small className="text-muted">({sess.date})</small>
+                                    </td>
+                                    <td>{sess.horaire}</td>
+                                    <td>
+                                      <span className="badge bg-light text-dark border me-1">{sess.groupe}</span>
+                                      {sess.filieres.map(f => (
+                                        <span key={f} className="badge bg-secondary me-1">{f}</span>
+                                      ))}
+                                    </td>
+                                    <td>{sess.module}</td>
+                                    <td>{sess.salle}</td>
+                                    <td>
+                                      <span className={`badge ${
+                                        sess.status === 'Présent' ? 'bg-success' :
+                                        sess.status === 'Absent' ? 'bg-danger' :
+                                        sess.status === 'En retard' ? 'bg-warning text-dark' :
+                                        'bg-dark'
+                                      }`}>
+                                        {sess.status}
+                                      </span>
+                                    </td>
+                                    <td className="small text-muted">{sess.details || '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : attendanceData ? (
+                    <div className="alert alert-light border text-center py-4 text-muted">
+                      <span style={{ fontSize: '1.8rem' }}>🔍</span>
+                      <p className="mb-0 mt-2">Aucun professeur ne correspond à la recherche "{attendanceSearch}".</p>
+                      <small>Essayez un autre nom ou laissez vide pour voir tous les professeurs.</small>
+                    </div>
+                  ) : (
+                    <div className="alert alert-light border text-center py-5 text-muted">
+                      <span style={{ fontSize: '2rem' }}>👨‍🏫</span>
+                      <h6 className="mt-3 fw-bold text-dark">Suivi des Présences Hebdomadaires</h6>
+                      <p className="mb-0">Entrez le nom d'un professeur ou cliquez sur "Rechercher" pour afficher le récapitulatif jour par jour de la semaine.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
