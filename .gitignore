@@ -33,3 +33,7 @@ yarn-error.log*
 # Uploads
 backend/static/uploads/*
 !backend/static/uploads/.gitkeep
+
+# Backups (fichiers temporaires archivés avec rétention de 3 mois)
+backend/backups/*
+!backend/backups/.gitkeep

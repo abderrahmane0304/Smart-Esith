@@ -10,12 +10,15 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_cors import CORS
 import jwt
 from werkzeug.security import check_password_hash
-from database import init_db, SessionLocal, Cours, Formation, Event, Absence, Retard, ChangementSalle, User, ActionLog, PlanningImport
+from database import init_db, SessionLocal, Cours, Formation, Event, Absence, Retard, ChangementSalle, User, ActionLog, PlanningImport, FileBackup, DB_PATH
 from clean_encoding import sanitize_string
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
 DASHBOARD_DIR = os.path.join(STATIC_DIR, 'dashboard')
+BACKUP_DIR = os.path.join(BASE_DIR, 'backups')
+os.makedirs(BACKUP_DIR, exist_ok=True)
+BACKUP_RETENTION_DAYS = 90  # Rétention de 3 mois (écrasement automatique après 90 jours)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)
@@ -286,8 +289,192 @@ def get_active_planning_import(db, ref_date=None):
     }
 
 
+def save_file_backup(file_or_bytes, original_filename, category, db=None):
+    """Enregistre une copie de sauvegarde d'un fichier importé dans BACKUP_DIR.
+    Définit une durée de rétention de 3 mois (90 jours).
+    """
+    if not file_or_bytes or not original_filename:
+        return None
+
+    # Extraction du contenu binaire
+    if isinstance(file_or_bytes, bytes):
+        raw = file_or_bytes
+    elif hasattr(file_or_bytes, 'read'):
+        pos = file_or_bytes.tell() if hasattr(file_or_bytes, 'tell') else 0
+        raw = file_or_bytes.read()
+        if hasattr(file_or_bytes, 'seek'):
+            file_or_bytes.seek(pos)
+    else:
+        return None
+
+    if not raw:
+        return None
+
+    safe_orig = os.path.basename(original_filename)
+    safe_clean = re.sub(r'[^a-zA-Z0-9_.-]', '_', safe_orig)
+    now = datetime.datetime.now()
+    ts = now.strftime('%Y%m%d_%H%M%S')
+    stored_filename = f"{category}_{ts}_{safe_clean}"
+    target_path = os.path.join(BACKUP_DIR, stored_filename)
+
+    try:
+        with open(target_path, 'wb') as f:
+            f.write(raw)
+    except Exception as e:
+        print(f"[Smart ESITH] Erreur sauvegarde fichier {stored_filename} :", e)
+        return None
+
+    file_size = len(raw)
+    created_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    expire_str = (now + datetime.timedelta(days=BACKUP_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+
+    backup_record = None
+    try:
+        backup_record = FileBackup(
+            filename=stored_filename,
+            original_name=safe_orig,
+            category=category,
+            file_path=stored_filename,
+            file_size=file_size,
+            created_at=created_str,
+            expire_at=expire_str
+        )
+        db.add(backup_record)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[Smart ESITH] Erreur indexation backup {stored_filename} :", e)
+    finally:
+        if own_session:
+            db.close()
+
+    return backup_record
+
+
+def create_database_backup(db=None):
+    """Crée un instantané de sauvegarde de la base de données SQLite hall_esith_v3.db.
+    Rétention de 3 mois (90 jours).
+    """
+    import shutil
+    if not os.path.exists(DB_PATH):
+        return None
+
+    now = datetime.datetime.now()
+    ts = now.strftime('%Y%m%d_%H%M%S')
+    stored_filename = f"database_{ts}_hall_esith_v3.db"
+    target_path = os.path.join(BACKUP_DIR, stored_filename)
+
+    try:
+        shutil.copy2(DB_PATH, target_path)
+        file_size = os.path.getsize(target_path)
+    except Exception as e:
+        print("[Smart ESITH] Erreur copie sauvegarde BDD :", e)
+        return None
+
+    created_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    expire_str = (now + datetime.timedelta(days=BACKUP_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+
+    backup_rec = None
+    try:
+        backup_rec = FileBackup(
+            filename=stored_filename,
+            original_name="hall_esith_v3.db",
+            category="database",
+            file_path=stored_filename,
+            file_size=file_size,
+            created_at=created_str,
+            expire_at=expire_str
+        )
+        db.add(backup_rec)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("[Smart ESITH] Erreur enregistrement backup BDD :", e)
+    finally:
+        if own_session:
+            db.close()
+
+    return backup_rec
+
+
+def cleanup_expired_backups(db=None):
+    """Écrase et supprime définitivement tous les fichiers de sauvegarde ayant dépassé 3 mois (90 jours) :
+    - Fichiers référencés dans la table file_backups dont expire_at est dépassé
+    - Fichiers physiques orphelins dans BACKUP_DIR datant de plus de 90 jours
+    - Affiches d'événements dans static/uploads/events datant de plus de 90 jours
+    """
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+
+    now = datetime.datetime.now()
+    now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    cutoff_ts = (now - datetime.timedelta(days=BACKUP_RETENTION_DAYS)).timestamp()
+    deleted_files = 0
+
+    try:
+        # 1. Nettoyage via la table FileBackup
+        expired_records = db.query(FileBackup).filter(FileBackup.expire_at <= now_str).all()
+        for rec in expired_records:
+            full_path = os.path.join(BACKUP_DIR, rec.filename)
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                except Exception:
+                    pass
+            db.delete(rec)
+            deleted_files += 1
+
+        db.commit()
+
+        # 2. Nettoyage des fichiers physiques dans BACKUP_DIR (> 90 jours)
+        if os.path.exists(BACKUP_DIR):
+            for fname in os.listdir(BACKUP_DIR):
+                fpath = os.path.join(BACKUP_DIR, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        if os.path.getmtime(fpath) < cutoff_ts:
+                            os.remove(fpath)
+                            deleted_files += 1
+                    except Exception:
+                        pass
+
+        # 3. Nettoyage des médias d'événements dans static/uploads/events (> 90 jours)
+        upload_events_dir = os.path.join(STATIC_DIR, 'uploads', 'events')
+        if os.path.exists(upload_events_dir):
+            for fname in os.listdir(upload_events_dir):
+                fpath = os.path.join(upload_events_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        if os.path.getmtime(fpath) < cutoff_ts:
+                            os.remove(fpath)
+                            deleted_files += 1
+                    except Exception:
+                        pass
+
+        if deleted_files > 0:
+            print(f"[Smart ESITH] Purge 3 mois : {deleted_files} fichier(s) de sauvegarde expiré(s) écrasé(s)/supprimé(s).")
+    except Exception as e:
+        db.rollback()
+        print("[Smart ESITH] Erreur lors de la purge des sauvegardes de 3 mois :", e)
+    finally:
+        if own_session:
+            db.close()
+
+    return deleted_files
+
+
 def cleanup_expired_records(db=None):
     """Supprime les enregistrements expirés :
+    - Fichiers de sauvegarde et imports de plus de 3 mois (90 jours)
     - Événements passés depuis plus de 2 semaines (14 jours)
     - Absences, retards et changements de salle antérieurs à aujourd'hui
     """
@@ -301,6 +488,9 @@ def cleanup_expired_records(db=None):
     deleted_alerts = 0
 
     try:
+        # Purge automatique des fichiers de backup de plus de 3 mois (90 jours)
+        cleanup_expired_backups(db)
+
         for e in db.query(Event).all():
             # Expiration : date_fin si spécifiée, sinon e.date
             end_date_str = getattr(e, 'date_fin', None) or e.date
@@ -818,6 +1008,9 @@ def import_planning(current_user):
     if not file:
         return jsonify({"error": "Aucun fichier sélectionné"}), 400
 
+    raw_file_bytes = file.read()
+    file.seek(0)
+
     try:
         df = read_table(file, header=None)
     except Exception as e:
@@ -912,6 +1105,10 @@ def import_planning(current_user):
             db.add(new_import)
 
         db.commit()
+
+        # Archivage automatique de sécurité pour 3 mois (90 jours) et instantané de la base
+        save_file_backup(raw_file_bytes, getattr(file, 'filename', 'planning_fi.xlsx') or 'planning_fi.xlsx', 'planning_fi', db)
+        create_database_backup(db)
     except Exception as e:
         db.rollback()
         return jsonify({"error": f"Erreur d'import : {e}"}), 500
@@ -1291,6 +1488,8 @@ def import_append(current_user):
     file = get_upload()
     if not file:
         return jsonify({"error": "Aucun fichier sélectionné"}), 400
+    raw_file_bytes = file.read()
+    file.seek(0)
     try:
         df = normalize_columns(read_table(file))
     except Exception as e:
@@ -1360,6 +1559,8 @@ def import_append(current_user):
                 ))
                 imported += 1
         db.commit()
+        # Archivage de sécurité pour 3 mois (90 jours)
+        save_file_backup(raw_file_bytes, getattr(file, 'filename', f"{req_type}.xlsx") or f"{req_type}.xlsx", req_type, db)
         log_action(db, current_user, f"Import {'Formation Continue' if req_type == 'formation_continue' else 'Visites RE'}", f"{imported} ligne(s) importée(s), {ignored} ignorée(s)")
     except Exception as e:
         db.rollback()
@@ -1380,6 +1581,8 @@ def import_events(current_user):
     file = get_upload()
     if not file:
         return jsonify({"error": "Aucun fichier sélectionné"}), 400
+    raw_file_bytes = file.read()
+    file.seek(0)
     try:
         df = normalize_columns(read_table(file))
     except Exception as e:
@@ -1400,6 +1603,8 @@ def import_events(current_user):
             db.add(Event(titre=titre, date=date, heure_debut=normalize_time(pick(row, 'HEURE', 'HEURE_DEBUT', 'HD')), lieu=pick(row, 'LIEU')))
             imported += 1
         db.commit()
+        # Archivage de sécurité pour 3 mois (90 jours)
+        save_file_backup(raw_file_bytes, getattr(file, 'filename', 'events.csv') or 'events.csv', 'events', db)
         cleanup_expired_records(db)
         log_action(db, current_user, "Import événements CSV", f"{imported} événement(s) importé(s), {ignored} ignorée(s)")
     except Exception as e:
@@ -1416,6 +1621,8 @@ def import_absences(current_user):
     file = get_upload()
     if not file:
         return jsonify({"error": "Aucun fichier sélectionné"}), 400
+    raw_file_bytes = file.read()
+    file.seek(0)
     try:
         df = normalize_columns(read_table(file))
     except Exception as e:
@@ -1439,12 +1646,98 @@ def import_absences(current_user):
             else:
                 ignored += 1
         db.commit()
+        # Archivage de sécurité pour 3 mois (90 jours)
+        save_file_backup(raw_file_bytes, getattr(file, 'filename', 'absences.csv') or 'absences.csv', 'absences', db)
         cleanup_expired_records(db)
         log_action(db, current_user, "Import absences/retards CSV", f"{imported} absence(s)/retard(s) importé(s), {ignored} ignorée(s)")
     except Exception as e:
         db.rollback()
         return jsonify({"error": f"Erreur d'import : {e}"}), 500
     return jsonify({"message": f"{imported} absence(s)/retard(s) importé(s), {ignored} ligne(s) ignorée(s)."})
+
+
+# -----------------
+# Gestion des Sauvegardes (Rétention : 3 mois / 90 jours)
+# -----------------
+@app.route('/api/dashboard/backups', methods=['GET'])
+@jwt_required
+def list_backups(current_user):
+    """Liste tous les fichiers archivés (rétention de 3 mois).
+    Écrase/supprime automatiquement les fichiers expirés.
+    """
+    if not roles_allowed(current_user, 'Admin', 'DEE', 'DRE', 'FC', 'Scolarite'):
+        return forbidden()
+    db = get_db()
+    cleanup_expired_backups(db)
+
+    now = datetime.datetime.now()
+    backups = db.query(FileBackup).order_by(FileBackup.id.desc()).all()
+    res = []
+    for b in backups:
+        try:
+            exp_d = datetime.datetime.strptime(b.expire_at, '%Y-%m-%d %H:%M:%S')
+            days_rem = max(0, (exp_d - now).days)
+        except Exception:
+            days_rem = 0
+        size_human = f"{b.file_size / 1024:.1f} Ko" if b.file_size < 1024 * 1024 else f"{b.file_size / (1024 * 1024):.2f} Mo"
+        res.append({
+            "id": b.id,
+            "filename": b.filename,
+            "original_name": b.original_name,
+            "category": b.category,
+            "file_size": b.file_size,
+            "file_size_human": size_human,
+            "created_at": b.created_at,
+            "expire_at": b.expire_at,
+            "days_remaining": days_rem
+        })
+    return jsonify(res)
+
+
+@app.route('/api/dashboard/backups/<int:id>/download', methods=['GET'])
+@jwt_required
+def download_backup(current_user, id):
+    """Télécharge un fichier de sauvegarde archivé."""
+    if not roles_allowed(current_user, 'Admin', 'DEE', 'DRE', 'FC', 'Scolarite'):
+        return forbidden()
+    db = get_db()
+    b = db.query(FileBackup).filter_by(id=id).first()
+    if not b:
+        return jsonify({"error": "Fichier de sauvegarde introuvable"}), 404
+    full_path = os.path.join(BACKUP_DIR, b.filename)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Le fichier physique n'existe plus sur le disque"}), 404
+    return send_file(
+        full_path,
+        as_attachment=True,
+        download_name=b.original_name
+    )
+
+
+@app.route('/api/dashboard/backups/clean', methods=['POST'])
+@jwt_required
+def manual_clean_backups(current_user):
+    """Déclenche la purge / écrasement des fichiers de sauvegarde expirés (> 3 mois)."""
+    if not roles_allowed(current_user, 'Admin', 'DEE'):
+        return forbidden()
+    db = get_db()
+    deleted = cleanup_expired_backups(db)
+    log_action(db, current_user, "Purge sauvegardes (>3 mois)", f"{deleted} fichier(s) écrasé(s)/supprimé(s)")
+    return jsonify({"success": True, "deleted_count": deleted})
+
+
+@app.route('/api/dashboard/backups/create-db-backup', methods=['POST'])
+@jwt_required
+def manual_db_backup(current_user):
+    """Crée manuellement une sauvegarde de la base de données avec rétention de 3 mois."""
+    if not roles_allowed(current_user, 'Admin', 'DEE'):
+        return forbidden()
+    db = get_db()
+    rec = create_database_backup(db)
+    if not rec:
+        return jsonify({"error": "Impossible de créer la sauvegarde de la base"}), 500
+    log_action(db, current_user, "Sauvegarde BDD", f"Fichier {rec.filename}")
+    return jsonify({"success": True, "filename": rec.filename, "expire_at": rec.expire_at})
 
 
 @app.route('/api/dashboard/groupes', methods=['GET'])
@@ -1546,6 +1839,12 @@ def save_event_media(file_storage):
     raw = file_storage.read()
     if not raw:
         raise ValueError("Le fichier téléversé est vide.")
+
+    # Archivage automatique de sécurité pour 3 mois (90 jours)
+    try:
+        save_file_backup(raw, file_storage.filename, 'event_media')
+    except Exception as e:
+        print("[Smart ESITH] Erreur archivage backup affiche :", e)
 
     if ext == '.pdf':
         try:

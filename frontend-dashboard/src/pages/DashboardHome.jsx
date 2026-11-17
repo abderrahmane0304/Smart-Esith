@@ -31,6 +31,11 @@ const DashboardHome = () => {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [exportingJournal, setExportingJournal] = useState(false);
 
+  // Sauvegardes & Archives (Rétention : 3 mois)
+  const [backups, setBackups] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [backupActionLoading, setBackupActionLoading] = useState(false);
+
   // Forms states
   const [raData, setRaData] = useState({ type: 'ABSENCE', groupe: '', heure: '', motif: '', prof: '' });
   const [salleData, setSalleData] = useState({ groupe: '', ancienneSalle: '', nouvelleSalle: '' });
@@ -96,6 +101,66 @@ const DashboardHome = () => {
       showNotification("Erreur lors du téléchargement du journal Excel", 'danger');
     } finally {
       setExportingJournal(false);
+    }
+  };
+
+  const fetchBackups = async () => {
+    try {
+      setBackupsLoading(true);
+      const res = await apiClient.get('/dashboard/backups');
+      setBackups(res.data || []);
+    } catch (err) {
+      console.error('Erreur chargement des sauvegardes:', err);
+    } finally {
+      setBackupsLoading(false);
+    }
+  };
+
+  const handleDownloadBackup = async (id, originalName) => {
+    try {
+      const res = await apiClient.get(`/dashboard/backups/${id}/download`, { responseType: 'blob' });
+      const blob = new Blob([res.data]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = originalName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      showNotification(`Téléchargement de "${originalName}" réussi`, 'success');
+    } catch (err) {
+      console.error('Erreur téléchargement sauvegarde:', err);
+      showNotification("Erreur lors du téléchargement du fichier archivé", 'danger');
+    }
+  };
+
+  const handleCleanExpiredBackups = async () => {
+    try {
+      setBackupActionLoading(true);
+      const res = await apiClient.post('/dashboard/backups/clean');
+      const count = res.data.deleted_count || 0;
+      showNotification(`Nettoyage terminé : ${count} fichier(s) expiré(s) (> 3 mois) écrasé(s)/supprimé(s).`, 'success');
+      fetchBackups();
+    } catch (err) {
+      console.error('Erreur nettoyage des sauvegardes:', err);
+      showNotification("Erreur lors de la purge des sauvegardes expirées", 'danger');
+    } finally {
+      setBackupActionLoading(false);
+    }
+  };
+
+  const handleCreateDbBackup = async () => {
+    try {
+      setBackupActionLoading(true);
+      const res = await apiClient.post('/dashboard/backups/create-db-backup');
+      showNotification(`Sauvegarde instantanée de la base créée : ${res.data.filename}`, 'success');
+      fetchBackups();
+    } catch (err) {
+      console.error('Erreur création sauvegarde BDD:', err);
+      showNotification("Erreur lors de la création de la sauvegarde", 'danger');
+    } finally {
+      setBackupActionLoading(false);
     }
   };
 
@@ -173,6 +238,7 @@ const DashboardHome = () => {
     fetchCarbone();
     fetchActivePeriod();
     fetchAttendance();
+    fetchBackups();
   }, []);
 
   useEffect(() => {
@@ -183,6 +249,7 @@ const DashboardHome = () => {
       fetchAttendance(attendanceSearch, selectedFiliere);
     } else if (activeTab === 'planning') {
       fetchActivePeriod();
+      fetchBackups();
     } else if (activeTab === 'statistiques') {
       fetchStats();
     } else if (activeTab === 'journal') {
@@ -524,14 +591,156 @@ const DashboardHome = () => {
             </div>
           )}
 
-          {/* PLANNINGS */}
+          {/* PLANNINGS & ARCHIVES 3 MOIS */}
           {activeTab === 'planning' && canAccess(['DEE']) && (
             <div className="col-12">
-              <div className="dash-card p-4">
+              <div className="dash-card p-4 mb-4">
                 <div className="card-header-accent" style={{ backgroundColor: '#8e44ad' }}></div>
                 <div className="card-body">
                   <h4 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Plannings Formation Initiale</h4>
-                  <ImportCSV endpoint="/dashboard/import-planning" title="Importer le fichier CSV/Excel" />
+                  <ImportCSV 
+                    endpoint="/dashboard/import-planning" 
+                    title="Importer le fichier CSV/Excel" 
+                    onSuccess={fetchBackups}
+                  />
+                </div>
+              </div>
+
+              {/* SECTION SAUVEGARDES & ARCHIVES (RÉTENTION 3 MOIS) */}
+              <div className="dash-card p-4">
+                <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
+                <div className="card-body">
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+                    <div>
+                      <h4 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                        📦 Sauvegardes & Archives des Fichiers (Rétention : 3 mois)
+                      </h4>
+                      <p className="text-muted small mb-0">
+                        Chaque import (plannings FI/FC, relations entreprises, affiches, base SQLite) est archivé automatiquement pendant 90 jours. Les fichiers sont automatiquement écrasés et supprimés après cette durée.
+                      </p>
+                    </div>
+                    <div className="d-flex flex-wrap gap-2">
+                      <button
+                        className="btn btn-outline-primary btn-sm d-flex align-items-center gap-1"
+                        onClick={handleCreateDbBackup}
+                        disabled={backupActionLoading}
+                        title="Créer immédiatement un instantané complet de la base SQLite avec rétention de 3 mois"
+                      >
+                        <span>💾</span>
+                        <span>Sauvegarder BDD</span>
+                      </button>
+                      <button
+                        className="btn btn-outline-warning btn-sm d-flex align-items-center gap-1"
+                        onClick={handleCleanExpiredBackups}
+                        disabled={backupActionLoading}
+                        title="Vérifier et écraser/supprimer immédiatement tous les fichiers expirés (> 90 jours)"
+                      >
+                        <span>🧹</span>
+                        <span>Purger expirés (&gt; 3 mois)</span>
+                      </button>
+                      <button
+                        className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1"
+                        onClick={fetchBackups}
+                        disabled={backupsLoading}
+                        title="Actualiser la liste des archives"
+                      >
+                        <span>🔄</span>
+                        <span>Actualiser</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {backupsLoading ? (
+                    <div className="text-center py-4">
+                      <div className="spinner-border text-primary" role="status">
+                        <span className="visually-hidden">Chargement...</span>
+                      </div>
+                      <div className="text-muted small mt-2">Chargement des archives de sauvegarde...</div>
+                    </div>
+                  ) : backups.length === 0 ? (
+                    <div className="alert alert-light border text-center py-4 text-muted">
+                      <span style={{ fontSize: '1.8rem' }}>📁</span>
+                      <p className="mb-0 mt-2">Aucun fichier archivé actuellement dans la période de 3 mois.</p>
+                      <small>Les prochains imports et sauvegardes apparaîtront automatiquement ici.</small>
+                    </div>
+                  ) : (
+                    <div className="table-responsive">
+                      <table className="table table-hover align-middle mb-0">
+                        <thead className="table-light">
+                          <tr>
+                            <th style={{ width: '150px' }}>Catégorie</th>
+                            <th>Fichier Original</th>
+                            <th style={{ width: '110px' }}>Taille</th>
+                            <th style={{ width: '160px' }}>Date Sauvegarde</th>
+                            <th style={{ width: '180px' }}>Écrasement Auto</th>
+                            <th style={{ width: '120px' }} className="text-end">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backups.map((b) => {
+                            let catBadge = { label: b.category, bg: 'bg-secondary' };
+                            if (b.category === 'planning_fi') {
+                              catBadge = { label: 'Planning FI', bg: 'bg-primary' };
+                            } else if (b.category === 'formation_continue') {
+                              catBadge = { label: 'Formation Continue', bg: 'bg-danger' };
+                            } else if (b.category === 'visites') {
+                              catBadge = { label: 'Relations Entr.', bg: 'bg-success' };
+                            } else if (b.category === 'event_media' || b.category === 'events') {
+                              catBadge = { label: 'Affiche Événement', bg: 'bg-warning text-dark' };
+                            } else if (b.category === 'database') {
+                              catBadge = { label: 'Base SQLite', bg: 'bg-dark' };
+                            } else if (b.category === 'absences') {
+                              catBadge = { label: 'Absences', bg: 'bg-info text-dark' };
+                            }
+
+                            const daysRem = b.days_remaining;
+                            const badgeColor = daysRem > 30 ? 'bg-success' : daysRem > 10 ? 'bg-warning text-dark' : 'bg-danger';
+
+                            return (
+                              <tr key={b.id}>
+                                <td>
+                                  <span className={`badge ${catBadge.bg}`}>
+                                    {catBadge.label}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div className="fw-semibold text-truncate" style={{ maxWidth: '320px' }} title={b.original_name}>
+                                    📄 {b.original_name}
+                                  </div>
+                                  <small className="text-muted text-truncate d-block font-monospace" style={{ fontSize: '0.75rem', maxWidth: '320px' }}>
+                                    {b.filename}
+                                  </small>
+                                </td>
+                                <td>
+                                  <span className="badge bg-light text-dark border">
+                                    {b.file_size_human}
+                                  </span>
+                                </td>
+                                <td className="small text-muted">
+                                  {b.created_at}
+                                </td>
+                                <td>
+                                  <div className="small fw-semibold">{b.expire_at}</div>
+                                  <span className={`badge ${badgeColor} mt-1`} style={{ fontSize: '0.7rem' }}>
+                                    ⏳ {daysRem} jour(s) restant(s)
+                                  </span>
+                                </td>
+                                <td className="text-end">
+                                  <button
+                                    className="btn btn-sm btn-outline-primary"
+                                    onClick={() => handleDownloadBackup(b.id, b.original_name)}
+                                    title={`Télécharger ${b.original_name}`}
+                                  >
+                                    ⬇️ Télécharger
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1126,7 +1335,12 @@ const DashboardHome = () => {
                 <div className="card-header-accent" style={{ backgroundColor: '#e74c3c' }}></div>
                 <div className="card-body">
                   <h4 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Formation Continue</h4>
-                  <ImportCSV endpoint="/dashboard/import-append" typeParam="formation_continue" title="Importer le Planning FC" />
+                  <ImportCSV 
+                    endpoint="/dashboard/import-append" 
+                    typeParam="formation_continue" 
+                    title="Importer le Planning FC" 
+                    onSuccess={fetchBackups}
+                  />
                 </div>
               </div>
             </div>
@@ -1139,7 +1353,12 @@ const DashboardHome = () => {
                 <div className="card-header-accent" style={{ backgroundColor: '#9b59b6' }}></div>
                 <div className="card-body">
                   <h4 className="fw-bold mb-4" style={{ color: '#0B4F6C' }}>Relations Entreprises (Visites)</h4>
-                  <ImportCSV endpoint="/dashboard/import-append" typeParam="visites" title="Importer le Planning RE" />
+                  <ImportCSV 
+                    endpoint="/dashboard/import-append" 
+                    typeParam="visites" 
+                    title="Importer le Planning RE" 
+                    onSuccess={fetchBackups}
+                  />
                 </div>
               </div>
             </div>

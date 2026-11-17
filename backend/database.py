@@ -110,6 +110,21 @@ class ActionLog(Base):
     details = Column(String)
     timestamp = Column(String, nullable=False)
 
+class FileBackup(Base):
+    """Sauvegarde et archivage des fichiers importés (plannings, visites, affiches, bdd).
+    Rétention : 3 mois (90 jours). Écrasement / suppression automatique après cette durée.
+    """
+    __tablename__ = 'file_backups'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(255), nullable=False)        # Nom physique du fichier sur le disque
+    original_name = Column(String(255), nullable=False)   # Nom d'origine uploadé
+    category = Column(String(50), nullable=False)         # 'planning_fi', 'formation_continue', 'visites', 'event_media', 'database'
+    file_path = Column(String(500), nullable=False)       # Chemin dans backend/backups
+    file_size = Column(Integer, default=0)                # Taille en octets
+    mime_type = Column(String(100), nullable=True)        # Type MIME
+    created_at = Column(String(30), nullable=False)       # YYYY-MM-DD HH:MM:SS
+    expire_at = Column(String(30), nullable=False)        # YYYY-MM-DD HH:MM:SS (created_at + 90 jours)
+
 
 # Database Configuration
 # Chemin absolu : la base est toujours celle du dossier backend, quel que soit

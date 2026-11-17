@@ -6,8 +6,10 @@ import io
 import openpyxl
 from app import (
     app, normalize_date, detect_cycle, init_db, SessionLocal,
-    User, Cours, Event, Absence, Retard, PlanningImport,
-    extract_filieres_from_group, get_active_planning_import
+    User, Cours, Event, Absence, Retard, PlanningImport, FileBackup,
+    extract_filieres_from_group, get_active_planning_import,
+    BACKUP_DIR, BACKUP_RETENTION_DAYS, save_file_backup,
+    create_database_backup, cleanup_expired_backups
 )
 
 @pytest.fixture
@@ -610,6 +612,126 @@ def test_feature4_event_posters_carousel_and_expiration(client):
         db.query(Event).filter(Event.titre.in_([test_titre_active, test_titre_expired])).delete()
         db.commit()
         db.close()
+
+
+def test_backup_retention_and_purge(client):
+    """Vérifie l'archivage 3 mois (90 jours) et l'écrasement/purge automatique des fichiers expirés."""
+    assert BACKUP_RETENTION_DAYS == 90
+    db = SessionLocal()
+
+    # Connexion Admin
+    res_login = client.post('/api/auth/login', json={"username": "admin", "password": "admin2024"})
+    assert res_login.status_code == 200
+    token = res_login.get_json()['token']
+    auth_header = {"Authorization": f"Bearer {token}"}
+
+    test_content = b"TEST BACKUP FILE RETENTION 3 MOIS ESITH"
+    test_orig_name = "test_planning_semaine_42.xlsx"
+    created_records = []
+    created_files = []
+
+    try:
+        # 1. Sauvegarde d'un fichier et vérification de la rétention 90 jours
+        rec = save_file_backup(test_content, test_orig_name, "planning_fi", db)
+        assert rec is not None
+        assert rec.id is not None
+        created_records.append(rec.id)
+        assert rec.original_name == test_orig_name
+        assert rec.category == "planning_fi"
+        assert rec.file_size == len(test_content)
+
+        created_dt = datetime.datetime.strptime(rec.created_at, '%Y-%m-%d %H:%M:%S')
+        expire_dt = datetime.datetime.strptime(rec.expire_at, '%Y-%m-%d %H:%M:%S')
+        delta_days = (expire_dt - created_dt).days
+        assert delta_days == 90
+
+        file_full_path = os.path.join(BACKUP_DIR, rec.filename)
+        assert os.path.exists(file_full_path)
+        created_files.append(file_full_path)
+        with open(file_full_path, 'rb') as f:
+            assert f.read() == test_content
+
+        # 2. Endpoint de liste des sauvegardes GET /api/dashboard/backups
+        res_list = client.get('/api/dashboard/backups', headers=auth_header)
+        assert res_list.status_code == 200
+        backups_data = res_list.get_json()
+        target_item = next((b for b in backups_data if b['id'] == rec.id), None)
+        assert target_item is not None
+        assert target_item['days_remaining'] in (89, 90)
+        assert 'file_size_human' in target_item
+
+        # 3. Endpoint de téléchargement GET /api/dashboard/backups/<id>/download
+        res_dl = client.get(f'/api/dashboard/backups/{rec.id}/download', headers=auth_header)
+        assert res_dl.status_code == 200
+        assert res_dl.data == test_content
+
+        # 4. Instantané base de données POST /api/dashboard/backups/create-db-backup
+        res_db_snap = client.post('/api/dashboard/backups/create-db-backup', headers=auth_header)
+        assert res_db_snap.status_code == 200
+        snap_data = res_db_snap.get_json()
+        assert snap_data['success'] is True
+        snap_file = os.path.join(BACKUP_DIR, snap_data['filename'])
+        assert os.path.exists(snap_file)
+        created_files.append(snap_file)
+
+        # 5. Simulation d'un fichier expiré (> 3 mois / 90 jours) pour vérifier l'écrasement / suppression
+        expired_filename = "planning_fi_expired_test_file.xlsx"
+        expired_path = os.path.join(BACKUP_DIR, expired_filename)
+        with open(expired_path, 'wb') as f:
+            f.write(b"OLD EXPIRED DATA OVER 3 MONTHS")
+        created_files.append(expired_path)
+
+        old_date = datetime.datetime.now() - datetime.timedelta(days=100)
+        old_expire = datetime.datetime.now() - datetime.timedelta(days=10)
+        old_rec = FileBackup(
+            filename=expired_filename,
+            original_name="old_import.xlsx",
+            category="planning_fi",
+            file_path=expired_filename,
+            file_size=30,
+            created_at=old_date.strftime('%Y-%m-%d %H:%M:%S'),
+            expire_at=old_expire.strftime('%Y-%m-%d %H:%M:%S')
+        )
+        db.add(old_rec)
+        db.commit()
+        created_records.append(old_rec.id)
+
+        # Exécuter le nettoyage / écrasement automatique
+        deleted_count = cleanup_expired_backups(db)
+        assert deleted_count >= 1
+
+        # Vérifier que le fichier expiré a été écrasé/supprimé du disque
+        assert not os.path.exists(expired_path)
+
+        # Vérifier que l'enregistrement expiré a été supprimé de la base de données
+        check_db_rec = db.query(FileBackup).filter_by(id=old_rec.id).first()
+        assert check_db_rec is None
+
+        # Vérifier que le fichier actif (récent) est toujours intact et n'a pas été supprimé
+        assert os.path.exists(file_full_path)
+        check_active_rec = db.query(FileBackup).filter_by(id=rec.id).first()
+        assert check_active_rec is not None
+
+        # 6. Endpoint de purge manuelle POST /api/dashboard/backups/clean
+        res_clean = client.post('/api/dashboard/backups/clean', headers=auth_header)
+        assert res_clean.status_code == 200
+        assert res_clean.get_json()['success'] is True
+
+    finally:
+        for r_id in created_records:
+            try:
+                db.query(FileBackup).filter_by(id=r_id).delete()
+            except Exception:
+                pass
+        db.commit()
+        db.close()
+        for f_path in created_files:
+            if os.path.exists(f_path):
+                try:
+                    os.remove(f_path)
+                except Exception:
+                    pass
+
 
 
 

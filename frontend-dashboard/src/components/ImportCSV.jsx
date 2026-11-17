@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import apiClient from '../api/apiClient';
 
-const ImportCSV = ({ endpoint, title, typeParam }) => {
+const ImportCSV = ({ endpoint, title, typeParam, onSuccess }) => {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState('');
 
@@ -20,6 +20,7 @@ const ImportCSV = ({ endpoint, title, typeParam }) => {
       });
       setMessage(res.data.message || 'Import réussi');
       setFile(null);
+      if (onSuccess) onSuccess();
     } catch (err) {
       console.error(err);
       setMessage(err.response?.data?.error || 'Erreur lors de l\'import');
