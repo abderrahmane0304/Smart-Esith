@@ -239,10 +239,17 @@ const DashboardHome = () => {
     fetchActivePeriod();
     fetchAttendance();
     fetchBackups();
+    if (user.role === 'Admin') {
+      fetchStats();
+    }
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'alertes') {
+    if (activeTab === 'accueil') {
+      if (user.role === 'Admin') {
+        fetchStats();
+      }
+    } else if (activeTab === 'alertes') {
       fetchAlertes();
       fetchGroupes();
       fetchActivePeriod();
@@ -253,8 +260,6 @@ const DashboardHome = () => {
       fetchActivePeriod();
     } else if (activeTab === 'sauvegardes') {
       fetchBackups();
-    } else if (activeTab === 'statistiques') {
-      fetchStats();
     } else if (activeTab === 'journal') {
       fetchJournal();
     }
@@ -475,17 +480,6 @@ const DashboardHome = () => {
             </button>
           )}
 
-          {canAccess(['DEE']) && (
-            <button 
-              onClick={() => selectTab('sauvegardes')} 
-              className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'sauvegardes' ? 'active' : ''}`}
-              title="Sauvegardes & Archives (3 mois)"
-            >
-              <span className="dash-menu-icon me-2">📦</span>
-              <span className="dash-menu-text">Sauvegardes</span>
-            </button>
-          )}
-
           {canAccess(['DEE', 'DRE']) && (
             <button 
               onClick={() => selectTab('evenements')} 
@@ -520,24 +514,26 @@ const DashboardHome = () => {
           )}
 
           {user.role === 'Admin' && (
-            <>
-              <button 
-                onClick={() => selectTab('statistiques')} 
-                className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'statistiques' ? 'active' : ''}`}
-                title="Statistiques"
-              >
-                <span className="dash-menu-icon me-2">📈</span>
-                <span className="dash-menu-text">Statistiques</span>
-              </button>
-              <button 
-                onClick={() => selectTab('journal')} 
-                className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'journal' ? 'active' : ''}`}
-                title="Journal d'actions"
-              >
-                <span className="dash-menu-icon me-2">📜</span>
-                <span className="dash-menu-text">Journal d'actions</span>
-              </button>
-            </>
+            <button 
+              onClick={() => selectTab('journal')} 
+              className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'journal' ? 'active' : ''}`}
+              title="Journal d'actions"
+            >
+              <span className="dash-menu-icon me-2">📜</span>
+              <span className="dash-menu-text">Journal d'actions</span>
+            </button>
+          )}
+
+          {/* Sauvegardes : Dernier onglet de la sidebar */}
+          {canAccess(['DEE']) && (
+            <button 
+              onClick={() => selectTab('sauvegardes')} 
+              className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'sauvegardes' ? 'active' : ''}`}
+              title="Sauvegardes & Archives (3 mois)"
+            >
+              <span className="dash-menu-icon me-2">📦</span>
+              <span className="dash-menu-text">Sauvegardes</span>
+            </button>
           )}
         </div>
         
@@ -595,12 +591,11 @@ const DashboardHome = () => {
               {activeTab === 'planning' && '📋 Imports Plannings'}
               {activeTab === 'presences' && '👨‍🏫 Suivi des Présences'}
               {activeTab === 'alertes' && '🔔 Alertes & Salles'}
-              {activeTab === 'sauvegardes' && '📦 Sauvegardes & Archives'}
               {activeTab === 'evenements' && '📅 Événements'}
               {activeTab === 're' && '🏢 Relations Entreprises'}
               {activeTab === 'fc' && '📚 Formation Continue'}
-              {activeTab === 'statistiques' && '📈 Statistiques'}
               {activeTab === 'journal' && '📜 Journal d\'actions'}
+              {activeTab === 'sauvegardes' && '📦 Sauvegardes & Archives'}
             </span>
           </div>
         </header>
@@ -632,6 +627,73 @@ const DashboardHome = () => {
                   <p className="text-muted fs-5">Sélectionnez une option dans le menu latéral pour gérer l'affichage dynamique du Hall ESITH.</p>
                 </div>
               </div>
+
+              {/* STATISTIQUES GÉNÉRALES EN TEMPS RÉEL (Intégrées dans le Tableau de bord) */}
+              {user.role === 'Admin' && (
+                <div className="dash-card p-4 mb-4 position-relative">
+                  <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
+                  <div className="card-body">
+                    <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+                      <div>
+                        <h4 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>📊 Statistiques Générales en Temps Réel</h4>
+                        <p className="text-muted small mb-0">Données en direct de la base Smart ESITH (Date : {stats?.date || 'Aujourd\'hui'})</p>
+                      </div>
+                      <button type="button" className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1" onClick={fetchStats}>
+                        <span>🔄</span>
+                        <span>Rafraîchir</span>
+                      </button>
+                    </div>
+
+                    {stats ? (
+                      <>
+                        <div className="dash-kpi-grid mb-4">
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #0B4F6C' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Séances Aujourd'hui</div>
+                            <div className="dash-kpi-value" style={{ color: '#0B4F6C' }}>{stats.cours_aujourdhui}</div>
+                          </div>
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #34495e' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Total Séances Base</div>
+                            <div className="dash-kpi-value text-secondary">{stats.total_cours}</div>
+                          </div>
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #c3d601' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Événements à Venir</div>
+                            <div className="dash-kpi-value" style={{ color: '#7a8700' }}>{stats.evenements_a_venir}</div>
+                          </div>
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #e74c3c', backgroundColor: '#fdf2f2' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Absences Déclarées</div>
+                            <div className="dash-kpi-value text-danger">{stats.absences_aujourdhui}</div>
+                          </div>
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #f39c12', backgroundColor: '#fef9ee' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Retards Déclarés</div>
+                            <div className="dash-kpi-value text-warning">{stats.retards_aujourdhui}</div>
+                          </div>
+                          <div className="dash-kpi-card" style={{ borderLeft: '4px solid #145a32', backgroundColor: '#f0f9f4' }}>
+                            <div className="text-muted small fw-bold text-uppercase">Changements Salle</div>
+                            <div className="dash-kpi-value" style={{ color: '#145a32' }}>{stats.changements_aujourdhui}</div>
+                          </div>
+                        </div>
+
+                        <div className="p-4 rounded border bg-light">
+                          <h5 className="fw-bold mb-3" style={{ color: '#0B4F6C' }}>Séances du jour par Cycle / Type</h5>
+                          <div className="dash-cycle-grid">
+                            {stats.par_cycle && Object.entries(stats.par_cycle).map(([cycle, count]) => (
+                              <div key={cycle} className="d-flex justify-content-between align-items-center p-2 bg-white rounded shadow-sm">
+                                <span className="fw-bold text-truncate me-2">{cycle}</span>
+                                <span className="badge bg-primary rounded-pill px-3 py-2 flex-shrink-0">{count}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-4 text-muted">
+                        <div className="spinner-border spinner-border-sm me-2" role="status"></div>
+                        Chargement des statistiques...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {canAccess(['Admin', 'Scolarite', 'DRE']) && (
                 <div className="dash-card p-4">
@@ -1453,71 +1515,6 @@ const DashboardHome = () => {
                     title="Importer le Planning RE" 
                     onSuccess={fetchBackups}
                   />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* STATISTIQUES (Admin) */}
-          {activeTab === 'statistiques' && user.role === 'Admin' && (
-            <div className="col-12">
-              <div className="dash-card p-4 mb-4 position-relative">
-                <div className="card-header-accent" style={{ backgroundColor: '#0B4F6C' }}></div>
-                <div className="card-body">
-                  <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-                    <div>
-                      <h4 className="fw-bold mb-1" style={{ color: '#0B4F6C' }}>Statistiques Générales</h4>
-                      <p className="text-muted small mb-0">Données en temps réel de la base Smart ESITH (Date : {stats?.date || 'Aujourd\'hui'})</p>
-                    </div>
-                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={fetchStats}>
-                      🔄 Rafraîchir
-                    </button>
-                  </div>
-
-                  {stats ? (
-                    <>
-                      <div className="dash-kpi-grid mb-4">
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #0B4F6C' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Séances Aujourd'hui</div>
-                          <div className="dash-kpi-value" style={{ color: '#0B4F6C' }}>{stats.cours_aujourdhui}</div>
-                        </div>
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #34495e' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Total Séances Base</div>
-                          <div className="dash-kpi-value text-secondary">{stats.total_cours}</div>
-                        </div>
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #c3d601' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Événements à Venir</div>
-                          <div className="dash-kpi-value" style={{ color: '#7a8700' }}>{stats.evenements_a_venir}</div>
-                        </div>
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #e74c3c', backgroundColor: '#fdf2f2' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Absences Déclarées</div>
-                          <div className="dash-kpi-value text-danger">{stats.absences_aujourdhui}</div>
-                        </div>
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #f39c12', backgroundColor: '#fef9ee' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Retards Déclarés</div>
-                          <div className="dash-kpi-value text-warning">{stats.retards_aujourdhui}</div>
-                        </div>
-                        <div className="dash-kpi-card" style={{ borderLeft: '4px solid #145a32', backgroundColor: '#f0f9f4' }}>
-                          <div className="text-muted small fw-bold text-uppercase">Changements Salle</div>
-                          <div className="dash-kpi-value" style={{ color: '#145a32' }}>{stats.changements_aujourdhui}</div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 rounded border bg-light">
-                        <h5 className="fw-bold mb-3" style={{ color: '#0B4F6C' }}>Séances du jour par Cycle / Type</h5>
-                        <div className="dash-cycle-grid">
-                          {stats.par_cycle && Object.entries(stats.par_cycle).map(([cycle, count]) => (
-                            <div key={cycle} className="d-flex justify-content-between align-items-center p-2 bg-white rounded shadow-sm">
-                              <span className="fw-bold text-truncate me-2">{cycle}</span>
-                              <span className="badge bg-primary rounded-pill px-3 py-2 flex-shrink-0">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-center py-4 text-muted">Chargement des statistiques...</div>
-                  )}
                 </div>
               </div>
             </div>
