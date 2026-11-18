@@ -470,8 +470,34 @@ function parseGroup(groupe) {
 }
 
 
+// ── Formate la durée de retard pour affichage clair dans la pilule ───────────
+function formatRetardDuration(raw) {
+    if (!raw) return '';
+    let s = String(raw).trim();
+    if (!s || s === 'nan' || s === 'None') return '';
+
+    // Nettoie d'éventuels préfixes comme "Retard :", "Retard -", "Retard"
+    s = s.replace(/^retard\s*[:\-]?\s*/i, '').trim();
+
+    // Si c'est juste un nombre (ex: "15" ou "+15")
+    if (/^\+?\d+$/.test(s)) {
+        return '+' + s.replace(/^\+/, '') + ' min';
+    }
+
+    // Si "15min", "+15min", "15 minutes", "15 mins", "+15 min"
+    const m = s.match(/^\+?(\d+)\s*(?:min(?:ute)?s?)?$/i);
+    if (m) {
+        return '+' + m[1] + ' min';
+    }
+
+    if (!s.startsWith('+')) {
+        s = '+' + s;
+    }
+    return s;
+}
+
 // ── Construit une pilule de cours ─────────────────────────────────────────────
-function buildPill(c, alertClass, salleContent) {
+function buildPill(c, alertClass, salleContent, retard) {
     const div = document.createElement('div');
     div.className = 'course-pill' + (alertClass ? ' ' + alertClass : '');
 
@@ -495,9 +521,20 @@ function buildPill(c, alertClass, salleContent) {
         roomClass = 'room-medium';
     }
 
+    // Badge de retard si le cours est retardé
+    let retardBadge = '';
+    if (retard) {
+        const formattedDur = formatRetardDuration(retard.duree);
+        const retardText = formattedDur ? `⏳ Retard ${formattedDur}` : '⏳ Retard';
+        retardBadge = `<span class="course-retard-badge">${esc(retardText)}</span>`;
+    }
+
+    const timeStr = esc(c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : '')));
+
     div.innerHTML = `
         <div class="course-time" style="color:${textColor};">
-            ${esc(c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : '')))}
+            <span class="course-time-val">${timeStr}</span>
+            ${retardBadge}
         </div>
         <div class="course-module ${modClass}" style="color:${textColor};">
             ${esc(groupeStr)}
@@ -705,9 +742,10 @@ function getAlert(c) {
         salleContent = `${oldS} S. ${esc(change.nouvelle_salle)}`;
     }
 
-    if ((allData.retards || []).find(x => matchesGroup(x.groupe)))  alertClass = 'alert-orange';
+    const retard = (allData.retards || []).find(x => matchesGroup(x.groupe));
+    if (retard) alertClass = 'alert-orange';
     if ((allData.absences || []).find(x => matchesGroup(x.groupe))) alertClass = 'alert-red';
-    return { alertClass, salleContent };
+    return { alertClass, salleContent, retard: (alertClass === 'alert-orange' ? retard : null) };
 }
 
 
@@ -852,11 +890,18 @@ function renderCycle() {
         flat.className = 'flat-cards ' + gridClass;
 
         pageCourses.forEach(c => {
+            const { alertClass, retard } = getAlert(c);
             const div = document.createElement('div');
-            div.className = 'course-pill flat-card ' + (isRe ? 'card-re' : 'card-fc');
+            div.className = 'course-pill flat-card ' + (isRe ? 'card-re' : 'card-fc') + (alertClass ? ' ' + alertClass : '');
             const horaire = c.h || ((c.hd || '') + (c.hf ? '-' + c.hf : ''));
+            let retardBadge = '';
+            if (retard) {
+                const formattedDur = formatRetardDuration(retard.duree);
+                const retardText = formattedDur ? `⏳ Retard ${formattedDur}` : '⏳ Retard';
+                retardBadge = ` <span class="course-retard-badge">${esc(retardText)}</span>`;
+            }
             div.innerHTML = `
-                ${horaire ? `<div class="flat-time">${esc(horaire)}</div>` : ''}
+                ${horaire ? `<div class="flat-time">${esc(horaire)}${retardBadge}</div>` : ''}
                 <div class="flat-title">${esc(c.groupe || '')}</div>
                 ${c.module ? `<div class="flat-sub">${esc(c.module)}</div>` : ''}
                 ${c.prof ? `<div class="flat-prof">${esc(c.prof)}</div>` : ''}
@@ -944,8 +989,8 @@ function renderCycle() {
             const displayedCourses = listY.slice(start, start + MAX_PER_PAGE);
 
             displayedCourses.forEach(c => {
-                const { alertClass, salleContent } = getAlert(c);
-                cell.appendChild(buildPill(c, alertClass, salleContent));
+                const { alertClass, salleContent, retard } = getAlert(c);
+                cell.appendChild(buildPill(c, alertClass, salleContent, retard));
             });
 
             row.appendChild(cell);

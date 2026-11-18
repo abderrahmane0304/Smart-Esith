@@ -608,7 +608,41 @@ header {
   letter-spacing: 0.5px;
   margin-bottom: 2px;
   opacity: 0.95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+}
+
+.course-time-val {
+  display: inline-block;
   white-space: nowrap;
+}
+
+/* Badge de retard haute visibilité dans la pilule orange */
+.course-retard-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #ffffff;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: clamp(0.66rem, 0.68vw + 0.15vh, 0.92rem);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  vertical-align: middle;
+  animation: retardPulse 2.5s infinite ease-in-out;
+}
+
+@keyframes retardPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+  100% { transform: scale(1); }
 }
 
 .course-module {
@@ -781,7 +815,7 @@ header {
 .course-pill.flat-card.card-fc { border-left-color: #198754; }
 .course-pill.flat-card.card-re { border-left-color: #e74c3c; }
 
-.flat-time  { font-size: clamp(0.85rem, 0.95vw + 0.15vh, 1.35rem); font-weight: 800; margin-bottom: 4px; color: var(--esith-blue-dark); }
+.flat-time  { font-size: clamp(0.85rem, 0.95vw + 0.15vh, 1.35rem); font-weight: 800; margin-bottom: 4px; color: var(--esith-blue-dark); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .flat-title { font-size: clamp(1.05rem, 1.2vw + 0.2vh, 1.75rem); font-weight: 900; color: var(--esith-blue-dark); margin-bottom: 3px; line-height: 1.2; }
 .flat-sub   { font-size: clamp(0.78rem, 0.88vw + 0.15vh, 1.25rem); text-transform: uppercase; font-weight: 700; color: var(--esith-blue-light); margin-bottom: 4px; letter-spacing: 0.3px; line-height: 1.2; }
 .flat-prof  { font-size: clamp(0.78rem, 0.85vw + 0.1vh, 1.15rem); font-style: italic; color: #444; margin-bottom: 4px; }

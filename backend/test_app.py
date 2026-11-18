@@ -731,9 +731,42 @@ def test_backup_retention_and_purge(client):
                     os.remove(f_path)
                 except Exception:
                     pass
+def test_retard_duration_in_hall_data(client):
+    """Vérifie que la durée de retard est bien fournie dans l'API hall pour affichage dans la pilule"""
+    res_login = client.post('/api/auth/login', json={"username": "admin", "password": "admin2024"})
+    token = res_login.get_json()['token']
+    auth_header = {"Authorization": f"Bearer {token}"}
 
+    today = datetime.datetime.now().strftime("%d/%m/%Y")
+    payload = {
+        "type": "RETARD",
+        "prof": "Prof. Test Retard",
+        "groupe": "CTM1G1",
+        "heure": "08:30",
+        "motif": "15 min",
+        "date": today
+    }
+    res_decl = client.post('/api/declare-retard-absence', json=payload, headers=auth_header)
+    assert res_decl.status_code == 200
 
+    db = SessionLocal()
+    retard_obj = db.query(Retard).filter_by(groupe="CTM1G1", date=today, actif=True).first()
+    assert retard_obj is not None
+    assert retard_obj.duree_retard == "15 min"
+    retard_id = retard_obj.id
+    db.close()
 
-
+    try:
+        hall_res = client.get('/api/hall/all_data')
+        assert hall_res.status_code == 200
+        data = hall_res.get_json()
+        assert 'retards' in data
+        retard_match = next((r for r in data['retards'] if r['groupe'] == 'CTM1G1'), None)
+        assert retard_match is not None
+        assert retard_match['duree'] == "15 min"
+        assert retard_match['prof'] == "Prof. Test Retard"
+    finally:
+        del_res = client.delete(f'/api/retards/{retard_id}', headers=auth_header)
+        assert del_res.status_code == 200
 
 
