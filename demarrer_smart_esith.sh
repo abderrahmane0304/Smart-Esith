@@ -74,6 +74,8 @@ launch_browser() {
         if [ "$BROWSER_TYPE" = "chromium" ]; then
             local KIOSK_PROFILE="/tmp/smart_esith_kiosk_${USER:-pi}"
             mkdir -p "$KIOSK_PROFILE" 2>/dev/null || true
+            # Vider le cache disque pour forcer la prise en compte immédiate des dernières modifications
+            rm -rf "$KIOSK_PROFILE/Default/Cache" "$KIOSK_PROFILE/Default/Code Cache" 2>/dev/null || true
             $RUN_PREFIX nohup "$BROWSER_BIN" \
                 --kiosk \
                 --noerrdialogs \
@@ -81,6 +83,9 @@ launch_browser() {
                 --no-first-run \
                 --disable-session-crashed-bubble \
                 --check-for-update-interval=31536000 \
+                --disable-cache \
+                --disk-cache-size=1 \
+                --media-cache-size=1 \
                 --user-data-dir="$KIOSK_PROFILE" \
                 "$URL" >/dev/null 2>&1 </dev/null &
         elif [ "$BROWSER_TYPE" = "firefox" ]; then

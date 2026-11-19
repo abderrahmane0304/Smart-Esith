@@ -6,7 +6,7 @@ import unicodedata
 import datetime
 import pandas as pd
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, send_from_directory, g, send_file
+from flask import Flask, request, jsonify, render_template, send_from_directory, g, send_file, make_response
 from flask_cors import CORS
 import jwt
 from werkzeug.security import check_password_hash
@@ -24,6 +24,14 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SMART_ESITH_SECRET', 'esith_super_secret_key_2026_extended_to_meet_32_bytes_length')
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20 Mo max par import
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Désactive le cache statique Flask pour affichage TV toujours frais
+
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 FI_CYCLES = ['Licence', 'Ingénieur', 'Master', 'Autre']
 CYCLE_RE = 'Relations Entreprises'
