@@ -12,6 +12,7 @@ Ce guide explique comment installer et utiliser le **bouton de démarrage rapide
 | `demarrer_smart_esith.sh` | **Script principal** de démarrage (équivalent de `.bat`) |
 | `demarrer_smart_esith_kiosk.sh` | **Script dédié Kiosk TV** (plein écran sans barre d'URL pour le Hall) |
 | `installer_rpi.sh` | **Installeur 1-clic** qui crée les boutons avec icône sur votre Bureau |
+| `mettre_a_jour_rpi.sh` | **Mise à jour en 1 commande** (git pull + redémarrage automatique) |
 | `arreter_smart_esith.sh` | Script pour couper le serveur proprement en 1 clic |
 | `Smart_ESITH.desktop` | Fichier raccourci bureau Linux |
 
@@ -70,7 +71,30 @@ Pour désactiver l'autostart plus tard si besoin :
 
 ---
 
-## 🌐 5. Accès Réseau depuis les PC de l'Administration
+## 🔄 5. Mettre à Jour Smart ESITH sur le Raspberry Pi
+
+Dès que vous poussez de nouvelles modifications sur GitHub, appliquez-les sur votre Raspberry Pi en ouvrant un terminal dans le dossier du projet et en exécutant :
+
+```bash
+bash mettre_a_jour_rpi.sh
+```
+
+Cette commande effectue automatiquement :
+1. L'arrêt des processus en cours (`app.py` et navigateur).
+2. Le téléchargement des derniers commits depuis GitHub (`git pull`).
+3. L'installation / mise à jour des dépendances nécessaires.
+4. La relance instantanée en plein écran TV (`Kiosk TV`).
+
+*Astuce manuelle sans script :*
+```bash
+./arreter_smart_esith.sh
+git pull origin main
+./demarrer_smart_esith_kiosk.sh
+```
+
+---
+
+## 🌐 6. Accès Réseau depuis les PC de l'Administration
 
 Le serveur écoute sur toutes les interfaces (`0.0.0.0:5001`). Le script affiche automatiquement l'IP locale au démarrage :
 
