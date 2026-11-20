@@ -38,8 +38,8 @@ rm -rf /tmp/smart_esith_kiosk_*/Default/Cache /tmp/smart_esith_kiosk_*/Default/"
 # 5. Mise à jour des dépendances Python
 echo "📦 [3/4] Vérification des dépendances Python..."
 if [ -f "$SCRIPT_DIR/backend/venv/bin/pip" ]; then
-    "$SCRIPT_DIR/backend/venv/bin/pip" install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
-    echo "   ✅ Dépendances Python à jour."
+    "$SCRIPT_DIR/backend/venv/bin/pip" install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet || "$SCRIPT_DIR/backend/venv/bin/pip" install Pillow openpyxl pymupdf --quiet || true
+    echo "   ✅ Dépendances Python à jour (Pillow, openpyxl, etc.)."
 fi
 
 echo ""

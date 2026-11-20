@@ -1868,14 +1868,23 @@ def save_event_media(file_storage):
         except Exception as e:
             raise ValueError(f"Erreur de conversion PDF : {e}")
     else:
-        from PIL import Image
-        img = Image.open(io.BytesIO(raw))
-        if img.mode in ('RGBA', 'LA') and ext in ('.jpg', '.jpeg'):
-            bg = Image.new('RGB', img.size, (255, 255, 255))
-            bg.paste(img, mask=img.split()[-1])
-            img = bg
-        img.save(out_path, format='PNG', optimize=True)
-        return f"/static/uploads/events/{out_filename}", 'image'
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(raw))
+            if img.mode in ('RGBA', 'LA') and ext in ('.jpg', '.jpeg'):
+                bg = Image.new('RGB', img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[-1])
+                img = bg
+            img.save(out_path, format='PNG', optimize=True)
+            return f"/static/uploads/events/{out_filename}", 'image'
+        except ImportError:
+            # Fallback robuste sans dépendance Pillow : enregistrement direct du fichier image
+            raw_ext = ext if ext in ('.png', '.jpg', '.jpeg', '.webp') else '.png'
+            raw_filename = f"event_{unique_id}{raw_ext}"
+            raw_path = os.path.join(UPLOAD_EVENTS_DIR, raw_filename)
+            with open(raw_path, 'wb') as f:
+                f.write(raw)
+            return f"/static/uploads/events/{raw_filename}", 'image'
 
 
 def event_to_dict(e):

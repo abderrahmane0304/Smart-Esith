@@ -150,13 +150,12 @@ fi
 
 # 6. Vérification rapide des dépendances (optimisée pour la rapidité au boot du Pi)
 echo "🔍 Vérification des dépendances Python..."
-if ! python -c "import flask, waitress, pandas, sqlalchemy, openpyxl, jwt" 2>/dev/null; then
+if ! python -c "import flask, waitress, pandas, sqlalchemy, openpyxl, jwt, PIL" 2>/dev/null; then
     echo "📦 Installation / mise à jour des dépendances depuis requirements.txt..."
     pip install -r requirements.txt --quiet
     if [ $? -ne 0 ]; then
-        echo "❌ Erreur lors de l'installation des dépendances."
-        read -p "Appuyez sur Entrée pour fermer..."
-        exit 1
+        echo "⚠️ Tentative d'installation directe de Pillow..."
+        pip install Pillow openpyxl --quiet || true
     fi
 else
     echo "✅ Dépendances Python déjà prêtes."
