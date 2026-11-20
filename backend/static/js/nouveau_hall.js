@@ -732,9 +732,32 @@ function getAlert(c) {
         return alertTokens.some(t => cGroupTokens.includes(t));
     };
 
+    const matchesTime = (alertHeure) => {
+        if (!alertHeure) return true;
+        const ah = String(alertHeure).trim().toLowerCase();
+        if (ah.includes('toute') || ah.includes('jour')) return true;
+        const cStart = timeToMinutes(c.hd || c.h);
+        if (cStart === null) return true;
+        const cEnd = timeToMinutes(c.hf) || (cStart + 90);
+
+        const parts = ah.split(/[-–—àa/]/);
+        if (parts.length >= 2) {
+            const aStart = timeToMinutes(parts[0]);
+            const aEnd = timeToMinutes(parts[1]);
+            if (aStart !== null && aEnd !== null) {
+                return (cStart < aEnd) && (cEnd > aStart);
+            }
+        }
+        const aStart = timeToMinutes(ah);
+        if (aStart !== null) {
+            return (cStart <= aStart && aStart < cEnd) || Math.abs(cStart - aStart) <= 20;
+        }
+        return true;
+    };
+
     // Le backend met déjà à jour la salle de la séance : on compare donc avec
     // la nouvelle salle (ou l'ancienne si la séance n'a pas été modifiée).
-    const change = changes.find(x => matchesGroup(x.groupe) &&
+    const change = changes.find(x => matchesGroup(x.groupe) && matchesTime(x.heure) &&
         (norm(x.nouvelle_salle) === norm(c.salle) || (x.ancienne_salle && norm(x.ancienne_salle) === norm(c.salle))));
     if (change) {
         alertClass = 'alert-vert-fonce alert-yellow alert-mauve';
@@ -742,9 +765,9 @@ function getAlert(c) {
         salleContent = `${oldS} S. ${esc(change.nouvelle_salle)}`;
     }
 
-    const retard = (allData.retards || []).find(x => matchesGroup(x.groupe));
+    const retard = (allData.retards || []).find(x => matchesGroup(x.groupe) && matchesTime(x.heure));
     if (retard) alertClass = 'alert-orange';
-    if ((allData.absences || []).find(x => matchesGroup(x.groupe))) alertClass = 'alert-red';
+    if ((allData.absences || []).find(x => matchesGroup(x.groupe) && matchesTime(x.heure))) alertClass = 'alert-red';
     return { alertClass, salleContent, retard: (alertClass === 'alert-orange' ? retard : null) };
 }
 

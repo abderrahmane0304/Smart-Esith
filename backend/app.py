@@ -225,6 +225,107 @@ def extract_filieres_from_group(groupe_str):
     return fils
 
 
+def parse_time_minutes(time_str):
+    """Convertit '14:00', '14h00', '14h', '14:30' en minutes depuis minuit."""
+    if not time_str:
+        return None
+    s = str(time_str).strip()
+    m = re.search(r'(\d{1,2})[hH:](\d{2})?', s)
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2)) if m.group(2) else 0
+    return hh * 60 + mm
+
+
+def parse_time_range(range_str):
+    """Extrait l'intervalle de début et fin en minutes pour un horaire alerté.
+    Supporte '14:00-15:30', '14:00 - 15:30', '14h - 15h30', '14:00', 'Toute la journée'.
+    """
+    if not range_str:
+        return None, None
+    s = str(range_str).strip().lower()
+    if any(k in s for k in ('toute', 'journee', 'journée', 'jour', 'all')):
+        return 'all', 'all'
+
+    parts = re.split(r'[-–—àa/]', s)
+    if len(parts) >= 2:
+        t1 = parse_time_minutes(parts[0])
+        t2 = parse_time_minutes(parts[1])
+        if t1 is not None and t2 is not None:
+            return min(t1, t2), max(t1, t2)
+        elif t1 is not None:
+            return t1, t1 + 90
+
+    t = parse_time_minutes(s)
+    if t is not None:
+        return t, None
+    return None, None
+
+
+def match_alert_to_session(alert_record, course, is_retard=False):
+    """Détermine avec précision si une alerte d'absence ou de retard correspond
+    à une séance de cours spécifique (vérification date, professeur, groupe ET horaire).
+    Évite qu'une alerte sur une seule séance ne contamine toutes les autres séances de la journée.
+    """
+    if not alert_record or not course:
+        return False
+
+    # 1. Correspondance de date
+    a_date = normalize_date(getattr(alert_record, 'date', None))
+    c_date = normalize_date(getattr(course, 'date', None))
+    if a_date and c_date and a_date != c_date:
+        return False
+
+    # 2. Correspondance de professeur (si spécifié dans l'alerte)
+    a_prof = clean(getattr(alert_record, 'prof', None)).lower()
+    c_prof = clean(getattr(course, 'prof', None)).lower()
+    if a_prof and c_prof:
+        if a_prof != c_prof and (a_prof not in c_prof) and (c_prof not in a_prof):
+            return False
+
+    # 3. Correspondance de groupe (si spécifié dans l'alerte)
+    a_grp = clean(getattr(alert_record, 'groupe', None)).upper()
+    c_grp = clean(getattr(course, 'groupe', None)).upper()
+    if a_grp and a_grp not in ('TOUS', 'ALL'):
+        if not c_grp:
+            return False
+        c_tokens = set(re.findall(r'[A-Za-z0-9_.-]+', c_grp))
+        a_tokens = set(re.findall(r'[A-Za-z0-9_.-]+', a_grp))
+        # Vérifie si le groupe de l'alerte correspond au cours (exact ou sous-groupe)
+        grp_matched = bool(a_tokens & c_tokens) or (a_grp in c_grp) or (c_grp in a_grp)
+        if not grp_matched:
+            return False
+
+    # 4. Correspondance d'horaire / séance
+    alert_heure = clean(getattr(alert_record, 'heure_prevue' if is_retard else 'heure', None))
+    if not alert_heure:
+        # Si aucune heure n'a été spécifiée dans l'alerte, elle couvre la journée pour ce groupe
+        return True
+
+    a_start, a_end = parse_time_range(alert_heure)
+    if a_start == 'all':
+        return True
+
+    c_start = parse_time_minutes(course.hd)
+    c_end = parse_time_minutes(course.hf)
+    if c_start is None:
+        return True  # Pas d'heure sur le cours, match par groupe/date
+
+    if c_end is None:
+        c_end = c_start + 90
+
+    if a_start is not None and c_start is not None:
+        if a_end is not None:
+            # Intervalle complet (ex: 14:00-15:30) : chevauchement strict
+            return (c_start < a_end) and (c_end > a_start)
+        else:
+            # Heure ponctuelle (ex: 14:00) : comprise dans la séance ou début proche
+            return (c_start <= a_start < c_end) or abs(c_start - a_start) <= 20
+
+    return True
+
+
 def get_active_planning_import(db, ref_date=None):
     """Retourne les métadonnées et données actives de l'import de planning Formation Initiale.
     Règle Empty State : Si aucun planning n'a été importé pour la période courante
@@ -1206,26 +1307,29 @@ def get_attendance():
             continue
 
         p_key = (prof_name.lower(), c.date)
-        status = "Présent"
-        details = ""
+        matched_abs = abs_by_prof_date.get(p_key, [])
+        cand_abs = next((a for a in matched_abs if match_alert_to_session(a, c, is_retard=False)), None)
 
-        matched_abs = abs_by_prof_date.get(p_key)
-        if matched_abs:
-            cand = next((a for a in matched_abs if clean(a.groupe) in clean(c.groupe) or clean(c.groupe) in clean(a.groupe)), matched_abs[0])
-            motif_txt = clean(cand.motif) or ""
+        cand_ret = None
+        if not cand_abs:
+            matched_ret = ret_by_prof_date.get(p_key, [])
+            cand_ret = next((r for r in matched_ret if match_alert_to_session(r, c, is_retard=True)), None)
+
+        if cand_abs:
+            motif_txt = clean(cand_abs.motif) or ""
             if 'annul' in motif_txt.lower():
                 status = "Annulé"
                 details = motif_txt or "Séance annulée"
             else:
                 status = "Absent"
                 details = motif_txt or "Absence déclarée"
+        elif cand_ret:
+            status = "En retard"
+            dur = clean(cand_ret.duree_retard)
+            details = f"Retard: {dur}" if dur else "Retard signalé"
         else:
-            matched_ret = ret_by_prof_date.get(p_key)
-            if matched_ret:
-                cand = next((r for r in matched_ret if clean(r.groupe) in clean(c.groupe) or clean(c.groupe) in clean(r.groupe)), matched_ret[0])
-                status = "En retard"
-                dur = clean(cand.duree_retard)
-                details = f"Retard: {dur}" if dur else "Retard signalé"
+            status = "Présent"
+            details = ""
 
         session_info = {
             "id": c.id,
@@ -1262,16 +1366,31 @@ def get_attendance():
         days_summary = []
         for d_key, d_obj in days_map.items():
             day_statuses = [ss["status"] for ss in d_obj["sessions"]]
-            if all(st == "Présent" for st in day_statuses):
+            p_cnt = sum(1 for st in day_statuses if st == "Présent")
+            a_cnt = sum(1 for st in day_statuses if st == "Absent")
+            r_cnt = sum(1 for st in day_statuses if st == "En retard")
+            can_cnt = sum(1 for st in day_statuses if st == "Annulé")
+            total_d = len(day_statuses)
+
+            if p_cnt == total_d:
                 d_stat = "Présent"
-            elif any(st == "Absent" for st in day_statuses):
+            elif a_cnt == total_d:
                 d_stat = "Absent"
-            elif any(st == "En retard" for st in day_statuses):
+            elif r_cnt == total_d:
                 d_stat = "En retard"
-            elif any(st == "Annulé" for st in day_statuses):
+            elif can_cnt == total_d:
                 d_stat = "Annulé"
             else:
-                d_stat = "Mixte"
+                parts = []
+                if p_cnt > 0:
+                    parts.append(f"{p_cnt} Présent(s)")
+                if a_cnt > 0:
+                    parts.append(f"{a_cnt} Absent(s)")
+                if r_cnt > 0:
+                    parts.append(f"{r_cnt} Retard(s)")
+                if can_cnt > 0:
+                    parts.append(f"{can_cnt} Annulé(s)")
+                d_stat = ", ".join(parts) if parts else "Mixte"
             d_obj["day_status"] = d_stat
             days_summary.append(d_obj)
 
@@ -1372,12 +1491,16 @@ def export_journal():
         horaire = fmt_h(c.hd, c.hf)
 
         p_key = (prof_name.lower(), c.date)
-        matched_abs = abs_by_prof_date.get(p_key)
-        matched_ret = ret_by_prof_date.get(p_key)
+        matched_abs = abs_by_prof_date.get(p_key, [])
+        cand_abs = next((a for a in matched_abs if match_alert_to_session(a, c, is_retard=False)), None)
 
-        if matched_abs:
-            cand = next((a for a in matched_abs if clean(a.groupe) in clean(c.groupe) or clean(c.groupe) in clean(a.groupe)), matched_abs[0])
-            motif_txt = clean(cand.motif) or "Absence déclarée"
+        cand_ret = None
+        if not cand_abs:
+            matched_ret = ret_by_prof_date.get(p_key, [])
+            cand_ret = next((r for r in matched_ret if match_alert_to_session(r, c, is_retard=True)), None)
+
+        if cand_abs:
+            motif_txt = clean(cand_abs.motif) or "Absence déclarée"
             if 'annul' in motif_txt.lower():
                 rows_annules.append([
                     c.date, day_name, horaire, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle), motif_txt
@@ -1386,11 +1509,10 @@ def export_journal():
                 rows_absents.append([
                     c.date, day_name, horaire, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle), motif_txt
                 ])
-        elif matched_ret:
-            cand = next((r for r in matched_ret if clean(r.groupe) in clean(c.groupe) or clean(c.groupe) in clean(r.groupe)), matched_ret[0])
-            dur = clean(cand.duree_retard) or "Non précisé"
-            h_prev = clean(cand.heure_prevue) or clean(c.hd)
-            h_reel = clean(cand.heure_reelle) or "-"
+        elif cand_ret:
+            dur = clean(cand_ret.duree_retard) or "Non précisé"
+            h_prev = clean(cand_ret.heure_prevue) or clean(c.hd)
+            h_reel = clean(cand_ret.heure_reelle) or "-"
             rows_retards.append([
                 c.date, day_name, h_prev, h_reel, dur, prof_name, c_fils, clean(c.groupe), clean(c.module), clean(c.salle)
             ])

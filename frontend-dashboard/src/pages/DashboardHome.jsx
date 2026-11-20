@@ -951,7 +951,56 @@ const DashboardHome = () => {
                           )}
                         </div>
                         <div className="mb-3">
-                          <input type="text" className="dash-input w-100" placeholder="Heure (ex: 10:00)" value={raData.heure} onChange={e=>setRaData({...raData, heure: e.target.value})} required />
+                          <label className="form-label small fw-bold text-muted mb-1">Horaire / Séance concernée *</label>
+                          <input
+                            type="text"
+                            className="dash-input w-100"
+                            placeholder="Ex: 14:00-15:30 ou 10:00 ou Toute la journée"
+                            value={raData.heure}
+                            onChange={e=>setRaData({...raData, heure: e.target.value})}
+                            required
+                          />
+                          <div className="d-flex gap-1 flex-wrap mt-2">
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary py-0 px-2 small"
+                              onClick={() => setRaData({ ...raData, heure: '08:30-10:00' })}
+                            >
+                              08:30-10:00
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary py-0 px-2 small"
+                              onClick={() => setRaData({ ...raData, heure: '10:15-11:45' })}
+                            >
+                              10:15-11:45
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary py-0 px-2 small"
+                              onClick={() => setRaData({ ...raData, heure: '14:00-15:30' })}
+                            >
+                              14:00-15:30
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary py-0 px-2 small"
+                              onClick={() => setRaData({ ...raData, heure: '15:45-17:15' })}
+                            >
+                              15:45-17:15
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-warning text-dark py-0 px-2 small fw-semibold"
+                              onClick={() => setRaData({ ...raData, heure: 'Toute la journée' })}
+                              title="S'applique à toutes les séances de la journée pour ce groupe/professeur"
+                            >
+                              ☀️ Toute la journée
+                            </button>
+                          </div>
+                          <small className="text-muted d-block mt-1" style={{ fontSize: '0.75rem' }}>
+                            💡 Choisissez la séance exacte (ex: 14:00-15:30) pour ne pas marquer les autres séances de la journée, ou cliquez sur <strong>Toute la journée</strong>.
+                          </small>
                         </div>
                         <div className="mb-4">
                           <input type="text" className="dash-input w-100" placeholder="Motif ou Durée du retard" value={raData.motif} onChange={e=>setRaData({...raData, motif: e.target.value})} required />

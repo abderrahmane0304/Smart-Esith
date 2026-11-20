@@ -770,3 +770,52 @@ def test_retard_duration_in_hall_data(client):
         assert del_res.status_code == 200
 
 
+def test_single_session_absence_does_not_affect_other_sessions(client):
+    """Vérifie que déclarer une absence pour une séance spécifique (ex: 14:00-15:30)
+    ne marque pas absent les autres séances du professeur dans la journée.
+    """
+    db = SessionLocal()
+    test_prof = "PROF_TEST_SINGLE_SESSION"
+    test_date = "25/11/2026"
+
+    # 4 séances pour ce professeur le même jour
+    c1 = Cours(date=test_date, hd="08:30", hf="10:00", prof=test_prof, groupe="GPH1G1", module="Technique", salle="Atelier 1", Cycle="Licence")
+    c2 = Cours(date=test_date, hd="10:15", hf="11:45", prof=test_prof, groupe="GPH1G1", module="Technique", salle="Atelier 1", Cycle="Licence")
+    c3 = Cours(date=test_date, hd="14:00", hf="15:30", prof=test_prof, groupe="DEH1G1", module="Dessin", salle="Salle D6", Cycle="Licence")
+    c4 = Cours(date=test_date, hd="15:45", hf="17:15", prof=test_prof, groupe="DEH1G1", module="Dessin", salle="Salle D6", Cycle="Licence")
+    db.add_all([c1, c2, c3, c4])
+    db.commit()
+
+    # Déclaration d'absence UNIQUEMENT pour la séance 3 (14:00-15:30 DEH1G1)
+    abs_rec = Absence(prof=test_prof, groupe="DEH1G1", date=test_date, heure="14:00-15:30", motif="Absent")
+    db.add(abs_rec)
+    db.commit()
+
+    try:
+        res = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_start={test_date}&date_end={test_date}')
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data['total_professors'] >= 1
+        prof_data = next((p for p in data['professors'] if p['prof'] == test_prof), None)
+        assert prof_data is not None
+
+        # Doit avoir 4 séances au total : 3 Présents et 1 Absent (et non 4 Absents !)
+        assert prof_data['total_sessions'] == 4
+        assert prof_data['presents'] == 3
+        assert prof_data['absents'] == 1
+
+        sessions = prof_data['sessions']
+        s_by_hd = {s['hd']: s for s in sessions}
+        assert s_by_hd['08:30']['status'] == "Présent"
+        assert s_by_hd['10:15']['status'] == "Présent"
+        assert s_by_hd['14:00']['status'] == "Absent"
+        assert s_by_hd['15:45']['status'] == "Présent"
+
+    finally:
+        db.query(Cours).filter_by(prof=test_prof).delete()
+        db.query(Absence).filter_by(prof=test_prof).delete()
+        db.commit()
+        db.close()
+
+
+
