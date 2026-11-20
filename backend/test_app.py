@@ -853,4 +853,60 @@ def test_single_session_absence_does_not_affect_other_sessions(client):
         db.close()
 
 
+def test_owasp_a05_security_headers(client):
+    """OWASP A05: Security Misconfiguration - Vérifie la présence des en-têtes HTTP de sécurité."""
+    res = client.get('/api/hall/date')
+    assert res.status_code == 200
+    headers = res.headers
+    assert headers.get('X-Content-Type-Options') == 'nosniff'
+    assert headers.get('X-Frame-Options') == 'SAMEORIGIN'
+    assert headers.get('X-XSS-Protection') == '1; mode=block'
+    assert headers.get('Referrer-Policy') == 'strict-origin-when-cross-origin'
+    assert 'no-store' in headers.get('Cache-Control', '')
+
+
+def test_owasp_a07_brute_force_rate_limiting(client):
+    """OWASP A07 & A04: Vérifie le blocage automatique après 5 tentatives de mot de passe échouées."""
+    from app import LOGIN_ATTEMPTS
+    LOGIN_ATTEMPTS.clear()
+
+    # 5 tentatives erronées consécutives
+    for i in range(5):
+        res = client.post('/api/auth/login', json={
+            'username': 'admin',
+            'password': 'wrong_password_attempt'
+        })
+        assert res.status_code == 401
+
+    # 6ème tentative : doit être immédiatement bloquée avec code 429 Too Many Requests
+    blocked_res = client.post('/api/auth/login', json={
+        'username': 'admin',
+        'password': 'wrong_password_attempt'
+    })
+    assert blocked_res.status_code == 429
+    assert 'Trop de tentatives' in blocked_res.get_json().get('error', '')
+
+    # Nettoyage pour les autres tests
+    LOGIN_ATTEMPTS.clear()
+
+
+def test_owasp_a08_magic_bytes_file_upload_validation(client):
+    """OWASP A08 & A03: Vérifie le rejet de fichiers dont le contenu binaire ne correspond pas à l'extension."""
+    login_res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin2024'})
+    token = login_res.get_json()['token']
+    auth_header = {'Authorization': f'Bearer {token}'}
+
+    # Faux PNG (fichier texte déguisé en .png sans les magic bytes \x89PNG\r\n\x1a\n)
+    fake_png = io.BytesIO(b"MALICIOUS_SCRIPT_CONTENT_NOT_A_PNG")
+    data = {
+        'titre': 'Test Sécurité Upload',
+        'date': '20/11/2026',
+        'file': (fake_png, 'test_fake.png')
+    }
+    res = client.post('/api/events', data=data, content_type='multipart/form-data', headers=auth_header)
+    assert res.status_code == 400
+    assert 'non conforme' in res.get_json().get('error', '')
+
+
+
 

@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_cors import CORS
 import jwt
 from werkzeug.security import check_password_hash
+from werkzeug.utils import secure_filename
 from database import init_db, SessionLocal, Cours, Formation, Event, Absence, Retard, ChangementSalle, User, ActionLog, PlanningImport, FileBackup, DB_PATH
 from clean_encoding import sanitize_string
 
@@ -22,16 +23,56 @@ BACKUP_RETENTION_DAYS = 90  # Rétention de 3 mois (écrasement automatique apr�
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)
-app.config['SECRET_KEY'] = os.environ.get('SMART_ESITH_SECRET', 'esith_super_secret_key_2026_extended_to_meet_32_bytes_length')
-app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20 Mo max par import
+
+# OWASP A02: Cryptographic Failures — Clé secrète persistante et cryptographiquement robuste (256-bit)
+SECRET_FILE = os.path.join(BASE_DIR, '.secret_key')
+if os.environ.get('SMART_ESITH_SECRET'):
+    SECRET_KEY = os.environ['SMART_ESITH_SECRET']
+elif os.path.exists(SECRET_FILE):
+    try:
+        with open(SECRET_FILE, 'r', encoding='utf-8') as f:
+            SECRET_KEY = f.read().strip()
+    except Exception:
+        import secrets
+        SECRET_KEY = secrets.token_hex(32)
+else:
+    import secrets
+    SECRET_KEY = secrets.token_hex(32)
+    try:
+        with open(SECRET_FILE, 'w', encoding='utf-8') as f:
+            f.write(SECRET_KEY)
+    except Exception:
+        pass
+
+app.config['SECRET_KEY'] = SECRET_KEY
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20 Mo max par import (OWASP A04)
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Désactive le cache statique Flask pour affichage TV toujours frais
 
+# OWASP A07 & A04: Protection anti brute-force sur l'authentification
+LOGIN_ATTEMPTS = {}  # ip -> list of timestamps
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_WINDOW = 300  # 5 minutes de verrouillage
+
 @app.after_request
-def add_no_cache_headers(response):
+def add_security_headers(response):
+    """OWASP A05: Security Misconfiguration — En-têtes HTTP défensifs indispensables."""
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), camera=(), microphone=(), payment=()'
     return response
+
+@app.errorhandler(413)
+def entity_too_large(e):
+    return jsonify({"error": "Fichier trop volumineux. La taille maximale autorisée est de 20 Mo."}), 413
+
+@app.errorhandler(429)
+def ratelimit_exceeded(e):
+    return jsonify({"error": "Trop de tentatives. Veuillez patienter avant de réessayer."}), 429
 
 FI_CYCLES = ['Licence', 'Ingénieur', 'Master', 'Autre']
 CYCLE_RE = 'Relations Entreprises'
@@ -419,12 +460,14 @@ def save_file_backup(file_or_bytes, original_filename, category, db=None):
     if not raw:
         return None
 
-    safe_orig = os.path.basename(original_filename)
+    safe_orig = secure_filename(os.path.basename(original_filename)) or "backup_file"
     safe_clean = re.sub(r'[^a-zA-Z0-9_.-]', '_', safe_orig)
     now = datetime.datetime.now()
     ts = now.strftime('%Y%m%d_%H%M%S')
     stored_filename = f"{category}_{ts}_{safe_clean}"
-    target_path = os.path.join(BACKUP_DIR, stored_filename)
+    target_path = os.path.abspath(os.path.join(BACKUP_DIR, stored_filename))
+    if not target_path.startswith(os.path.abspath(BACKUP_DIR)):
+        return None
 
     try:
         with open(target_path, 'wb') as f:
@@ -797,6 +840,17 @@ def server_error(e):
 # -----------------
 @app.route('/api/auth/login', methods=['POST'])
 def login():
+    # OWASP A07 & A04: Protection anti brute-force par IP
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr or '127.0.0.1').split(',')[0].strip()
+    now_ts = datetime.datetime.now().timestamp()
+    attempts = [t for t in LOGIN_ATTEMPTS.get(client_ip, []) if now_ts - t < LOGIN_LOCKOUT_WINDOW]
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        remaining = int(LOGIN_LOCKOUT_WINDOW - (now_ts - attempts[0]))
+        return jsonify({
+            'message': f'Trop de tentatives échouées. Compte temporairement verrouillé pour {remaining} secondes.',
+            'error': f'Trop de tentatives échouées. Veuillez patienter {remaining} secondes.'
+        }), 429
+
     data = request.get_json(silent=True) or {}
     username = clean(data.get('username')).lower()
     password = data.get('password') or ''
@@ -804,18 +858,29 @@ def login():
     user = db.query(User).filter_by(username=username, actif=True).first()
     valid = False
     if user:
-        if check_password_hash(user.password_hash, password):
+        if user.password_hash and check_password_hash(user.password_hash, password):
             valid = True
-        elif password in (f"{username}2024", "esith2024", "admin2024"):
+        elif not user.password_hash and password in (f"{username}2024", "esith2024", "admin2024"):
             valid = True
             from werkzeug.security import generate_password_hash
             user.password_hash = generate_password_hash(password)
             db.commit()
 
     if valid:
+        # Réinitialisation des tentatives échouées après connexion réussie
+        LOGIN_ATTEMPTS.pop(client_ip, None)
         token = jwt.encode({'user_id': user.id, 'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)}, app.config['SECRET_KEY'], algorithm="HS256")
-        log_action(db, user, "Connexion", "Connexion réussie")
+        log_action(db, user, "Connexion", f"Connexion réussie depuis IP {client_ip}")
         return jsonify({'token': token, 'access_token': token, 'role': user.role, 'username': user.username})
+
+    # OWASP A09: Enregistrement de l'échec d'authentification pour surveillance
+    attempts.append(now_ts)
+    LOGIN_ATTEMPTS[client_ip] = attempts
+    try:
+        log_action(db, username or "Anonyme", "Échec de connexion", f"Tentative avec mot de passe invalide depuis IP {client_ip}")
+    except Exception:
+        pass
+
     return jsonify({'message': 'Identifiants invalides', 'error': 'Identifiants invalides'}), 401
 
 
@@ -1834,13 +1899,15 @@ def download_backup(current_user, id):
     b = db.query(FileBackup).filter_by(id=id).first()
     if not b:
         return jsonify({"error": "Fichier de sauvegarde introuvable"}), 404
-    full_path = os.path.join(BACKUP_DIR, b.filename)
-    if not os.path.exists(full_path):
+    # Protection Path Traversal (OWASP A01 & A03)
+    safe_filename = os.path.basename(b.filename)
+    full_path = os.path.abspath(os.path.join(BACKUP_DIR, safe_filename))
+    if not full_path.startswith(os.path.abspath(BACKUP_DIR)) or not os.path.exists(full_path):
         return jsonify({"error": "Le fichier physique n'existe plus sur le disque"}), 404
     return send_file(
         full_path,
         as_attachment=True,
-        download_name=b.original_name
+        download_name=os.path.basename(b.original_name)
     )
 
 
@@ -1953,6 +2020,21 @@ UPLOAD_EVENTS_DIR = os.path.join(STATIC_DIR, 'uploads', 'events')
 os.makedirs(UPLOAD_EVENTS_DIR, exist_ok=True)
 
 
+def validate_file_signature(raw_bytes, ext):
+    """Valide les signatures binaires (magic bytes) contre le spoofing d'extension (OWASP A08 & A03)."""
+    if not raw_bytes or len(raw_bytes) < 4:
+        return False
+    if ext == '.png' and raw_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+        return True
+    if ext in ('.jpg', '.jpeg') and raw_bytes.startswith(b'\xff\xd8'):
+        return True
+    if ext == '.webp' and raw_bytes.startswith(b'RIFF') and b'WEBP' in raw_bytes[:16]:
+        return True
+    if ext == '.pdf' and raw_bytes.startswith(b'%PDF'):
+        return True
+    return False
+
+
 def save_event_media(file_storage):
     """Sauvegarde une image ou convertit la 1ère page d'un PDF en PNG haute résolution."""
     if not file_storage or not file_storage.filename:
@@ -1969,6 +2051,10 @@ def save_event_media(file_storage):
     raw = file_storage.read()
     if not raw:
         raise ValueError("Le fichier téléversé est vide.")
+
+    # Validation stricte du contenu réel vs format déclaré (OWASP A08)
+    if not validate_file_signature(raw, ext):
+        raise ValueError(f"Contenu de fichier non conforme au format déclaré ({ext.upper()}).")
 
     # Archivage automatique de sécurité pour 3 mois (90 jours)
     try:

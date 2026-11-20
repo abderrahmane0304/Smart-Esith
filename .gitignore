@@ -48,3 +48,7 @@ backend/backups/*
 backend/*.db
 backend/test_*.db
 !backend/hall_esith_v3.seed.db
+
+# Secrets & Tokens cryptographiques (OWASP A02)
+.secret_key
+backend/.secret_key
