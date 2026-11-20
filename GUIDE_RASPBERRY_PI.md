@@ -71,26 +71,24 @@ Pour désactiver l'autostart plus tard si besoin :
 
 ---
 
-## 🔄 5. Mettre à Jour Smart ESITH sur le Raspberry Pi
+## 🔄 5. Mettre à Jour Smart ESITH sur le Raspberry Pi (Protection Totale des Données)
 
-Dès que vous poussez de nouvelles modifications sur GitHub, appliquez-les sur votre Raspberry Pi en ouvrant un terminal dans le dossier du projet et en exécutant :
+Dès que vous poussez de nouvelles améliorations sur GitHub, appliquez-les sur votre Raspberry Pi en ouvrant un terminal dans le dossier du projet et en exécutant :
 
 ```bash
 bash mettre_a_jour_rpi.sh
 ```
 
-Cette commande effectue automatiquement :
-1. L'arrêt des processus en cours (`app.py` et navigateur).
-2. Le téléchargement des derniers commits depuis GitHub (`git pull`).
-3. L'installation / mise à jour des dépendances nécessaires.
-4. La relance instantanée en plein écran TV (`Kiosk TV`).
+Cette commande est conçue pour **garantir zéro perte de données** :
+1. **Arrêt sécurisé** des processus en cours (`app.py` et navigateur).
+2. **Sauvegarde instantanée et préservation** de votre base de données locale (`backend/hall_esith_v3.db`) et de toutes les affiches/images uploadées.
+3. **Synchronisation du code** depuis GitHub (`git fetch & reset --hard`).
+4. **Restauration automatique** de votre base locale et de vos affiches (aucun planning, absence, retard ou événement déjà saisi sur le Raspberry Pi n'est écrasé !).
+5. **Mise à jour des dépendances** Python si nécessaire.
+6. **Relance instantanée** en plein écran TV (`Kiosk TV`).
 
-*Astuce manuelle sans script :*
-```bash
-./arreter_smart_esith.sh
-git pull origin main
-./demarrer_smart_esith_kiosk.sh
-```
+> [!IMPORTANT]
+> Vos données réelles (cours importés, professeurs absents, retards, changements de salle, affiches d'événements) résident sur le Raspberry Pi et ne sont **jamais écrasées** par les mises à jour de code que vous développez sur votre PC et poussez sur GitHub.
 
 ---
 

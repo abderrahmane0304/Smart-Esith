@@ -131,6 +131,16 @@ class FileBackup(Base):
 # le répertoire depuis lequel le serveur est lancé.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get('SMART_ESITH_DB', os.path.join(BASE_DIR, 'hall_esith_v3.db'))
+
+# Auto-initialisation depuis le template seed si la base n'existe pas encore (nouvelle installation)
+SEED_PATH = os.path.join(BASE_DIR, 'hall_esith_v3.seed.db')
+if not os.path.exists(DB_PATH) and os.path.exists(SEED_PATH) and os.path.abspath(DB_PATH) != os.path.abspath(SEED_PATH):
+    import shutil
+    try:
+        shutil.copyfile(SEED_PATH, DB_PATH)
+    except Exception:
+        pass
+
 DATABASE_URL = "sqlite:///" + DB_PATH.replace('\\', '/')
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

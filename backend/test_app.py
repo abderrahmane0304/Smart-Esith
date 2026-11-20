@@ -1,5 +1,18 @@
-import pytest
 import os
+import sys
+
+# Isoler strictement les tests unitaires pour ne JAMAIS impacter la base réelle hall_esith_v3.db
+TEST_DB_NAME = "test_smart_esith.db"
+TEST_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), TEST_DB_NAME)
+os.environ['SMART_ESITH_DB'] = TEST_DB_PATH
+
+if os.path.exists(TEST_DB_PATH):
+    try:
+        os.remove(TEST_DB_PATH)
+    except Exception:
+        pass
+
+import pytest
 import json
 import datetime
 import io
@@ -12,16 +25,12 @@ from app import (
     create_database_backup, cleanup_expired_backups
 )
 
+# Initialisation de la base de test propre avec tables et utilisateurs par défaut
+init_db()
+
 @pytest.fixture
 def client():
     app.config['TESTING'] = True
-    app.config['DATABASE_URL'] = "sqlite:///:memory:"
-    
-    # We must mock database URL inside app.py and database.py if we want true memory,
-    # but since it's hardcoded to 'hall_esith_v3.db', we will just use a test db file
-    if os.path.exists('test_hall.db'):
-        os.remove('test_hall.db')
-        
     with app.test_client() as client:
         yield client
 
@@ -425,6 +434,32 @@ def test_fi_cutoff_17h30(client):
 
 def test_feature1_dynamic_excel_import_and_active_period(client):
     """Vérifie l'extraction dynamique des professeurs & filières et la règle de l'état vide."""
+    db = SessionLocal()
+    # Créer un import actif et un cours de test pour rendre le test autonome
+    p_imp = db.query(PlanningImport).filter_by(active=True).first()
+    if not p_imp:
+        p_imp = PlanningImport(
+            filename="planning_test.xlsx",
+            period_start="16/11/2026",
+            period_end="21/11/2026",
+            period_type="week",
+            filieres=json.dumps(["BDM", "GPH", "DEH"]),
+            professors=json.dumps(["PROF_TEST", "EL KHALDI Amine"]),
+            active=True
+        )
+        c = Cours(
+            date="16/11/2026",
+            Cycle="Licence",
+            prof="PROF_TEST",
+            groupe="BDM1G1",
+            module="Marketing",
+            salle="S1",
+            hd="08:30",
+            hf="10:00"
+        )
+        db.add_all([p_imp, c])
+        db.commit()
+
     # Test extraction des filières à partir de groupes variés
     assert extract_filieres_from_group("BDM2G1 BDM2G2") == {"BDM"}
     assert extract_filieres_from_group("INGTCG1.1 INGTCG1.2") == {"INGTCG"}

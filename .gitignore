@@ -37,3 +37,14 @@ backend/static/uploads/*
 # Backups (fichiers temporaires archivés avec rétention de 3 mois)
 backend/backups/*
 !backend/backups/.gitkeep
+
+# Bases de données SQLite locales (Ne JAMAIS écraser la base de production du Raspberry Pi)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backend/*.db
+backend/test_*.db
+!backend/hall_esith_v3.seed.db
