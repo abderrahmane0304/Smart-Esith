@@ -79,8 +79,10 @@ git update-index --skip-worktree backend/hall_esith_v3.db 2>/dev/null || true
 # Nettoyer les vieilles archives de sauvegarde (conserver les 25 plus récentes)
 ls -1t "$BACKUP_DIR"/rpi_prod_backup_*.db 2>/dev/null | tail -n +26 | xargs -r rm -f 2>/dev/null || true
 
-# Permissions d'exécution
+# Permissions d'exécution et création des dossiers uploads/backups
 chmod +x *.sh 2>/dev/null || true
+mkdir -p "$SCRIPT_DIR/backend/static/uploads/events" "$SCRIPT_DIR/backend/backups" 2>/dev/null || true
+chmod -R 777 "$SCRIPT_DIR/backend/static/uploads" "$SCRIPT_DIR/backend/backups" 2>/dev/null || true
 
 # Nettoyage du cache Chromium du profil Kiosk
 rm -rf /tmp/smart_esith_kiosk_*/Default/Cache /tmp/smart_esith_kiosk_*/Default/"Code Cache" 2>/dev/null || true

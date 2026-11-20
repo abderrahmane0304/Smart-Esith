@@ -43,6 +43,9 @@ fi
 if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then
     MISSING_PKGS="$MISSING_PKGS python3-pip"
 fi
+if ! dpkg -s python3-pil >/dev/null 2>&1; then
+    MISSING_PKGS="$MISSING_PKGS python3-pil"
+fi
 
 if [ -n "$MISSING_PKGS" ]; then
     echo "   ⚠️ Paquets manquants détectés :$MISSING_PKGS"

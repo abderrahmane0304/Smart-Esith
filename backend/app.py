@@ -1988,7 +1988,13 @@ def save_event_media(file_storage):
             doc.close()
             return f"/static/uploads/events/{out_filename}", 'pdf'
         except Exception as e:
-            raise ValueError(f"Erreur de conversion PDF : {e}")
+            # Fallback robuste si fitz n'est pas disponible ou échoue
+            print(f"[Smart ESITH] Fallback PDF direct (fitz indisponible ou erreur: {e})")
+            pdf_filename = f"event_{unique_id}.pdf"
+            pdf_path = os.path.join(UPLOAD_EVENTS_DIR, pdf_filename)
+            with open(pdf_path, 'wb') as f:
+                f.write(raw)
+            return f"/static/uploads/events/{pdf_filename}", 'pdf'
     else:
         try:
             from PIL import Image
@@ -1999,8 +2005,9 @@ def save_event_media(file_storage):
                 img = bg
             img.save(out_path, format='PNG', optimize=True)
             return f"/static/uploads/events/{out_filename}", 'image'
-        except ImportError:
+        except Exception as img_err:
             # Fallback robuste sans dépendance Pillow : enregistrement direct du fichier image
+            print(f"[Smart ESITH] Fallback image brute (PIL indisponible ou erreur: {img_err})")
             raw_ext = ext if ext in ('.png', '.jpg', '.jpeg', '.webp') else '.png'
             raw_filename = f"event_{unique_id}{raw_ext}"
             raw_path = os.path.join(UPLOAD_EVENTS_DIR, raw_filename)
@@ -2088,10 +2095,30 @@ def create_event(current_user):
         duree_affichage_sec=duree_sec,
         actif=True
     )
-    db.add(e)
-    db.commit()
-    cleanup_expired_records(db)
-    log_action(db, current_user, "Création événement", f"ID {e.id}: {titre} ({date})" + (f" [Affiche: {mode_affichage}]" if media_path else ""))
+    try:
+        db.add(e)
+        db.commit()
+    except Exception as db_err:
+        db.rollback()
+        print(f"[Smart ESITH] Erreur SQL lors de l'ajout d'événement: {db_err}")
+        try:
+            from database import _migrate_columns
+            _migrate_columns()
+            db.add(e)
+            db.commit()
+        except Exception as retry_err:
+            db.rollback()
+            return jsonify({"error": f"Erreur base de données : {retry_err}"}), 500
+
+    try:
+        cleanup_expired_records(db)
+    except Exception as cl_err:
+        print("[Smart ESITH] Erreur nettoyage lors de création événement :", cl_err)
+
+    try:
+        log_action(db, current_user, "Création événement", f"ID {e.id}: {titre} ({date})" + (f" [Affiche: {mode_affichage}]" if media_path else ""))
+    except Exception:
+        pass
     return jsonify({"success": True, "id": e.id, "event": event_to_dict(e)})
 
 
