@@ -435,20 +435,26 @@ def test_fi_cutoff_17h30(client):
 def test_feature1_dynamic_excel_import_and_active_period(client):
     """Vérifie l'extraction dynamique des professeurs & filières et la règle de l'état vide."""
     db = SessionLocal()
-    # Créer un import actif et un cours de test pour rendre le test autonome
+    today = datetime.date.today()
+    monday = today - datetime.timedelta(days=today.weekday())
+    sunday = monday + datetime.timedelta(days=6)
+    m_str = monday.strftime('%d/%m/%Y')
+    s_str = sunday.strftime('%d/%m/%Y')
+
+    # Créer ou actualiser un import actif pour la semaine courante
     p_imp = db.query(PlanningImport).filter_by(active=True).first()
     if not p_imp:
         p_imp = PlanningImport(
             filename="planning_test.xlsx",
-            period_start="16/11/2026",
-            period_end="21/11/2026",
+            period_start=m_str,
+            period_end=s_str,
             period_type="week",
             filieres=json.dumps(["BDM", "GPH", "DEH"]),
             professors=json.dumps(["PROF_TEST", "EL KHALDI Amine"]),
             active=True
         )
         c = Cours(
-            date="16/11/2026",
+            date=m_str,
             Cycle="Licence",
             prof="PROF_TEST",
             groupe="BDM1G1",
@@ -458,6 +464,10 @@ def test_feature1_dynamic_excel_import_and_active_period(client):
             hf="10:00"
         )
         db.add_all([p_imp, c])
+        db.commit()
+    else:
+        p_imp.period_start = m_str
+        p_imp.period_end = s_str
         db.commit()
 
     # Test extraction des filières à partir de groupes variés

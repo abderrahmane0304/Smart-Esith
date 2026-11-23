@@ -2,6 +2,7 @@ import React, { useContext, useState, useEffect } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import ImportCSV from '../components/ImportCSV';
 import EventList from '../components/EventList';
+import HallTvLivePreview from '../components/HallTvLivePreview';
 import apiClient from '../api/apiClient';
 import '../styles/dashboard.css';
 
@@ -446,6 +447,16 @@ const DashboardHome = () => {
             <span className="dash-menu-icon me-2">📊</span>
             <span className="dash-menu-text">Tableau de bord</span>
           </button>
+
+          <button 
+            onClick={() => selectTab('ecran_hall')} 
+            className={`list-group-item list-group-item-action rounded dash-menu-item ${activeTab === 'ecran_hall' ? 'active' : ''}`}
+            title="Aperçu en direct de l'Écran du Hall (TV)"
+          >
+            <span className="dash-menu-icon me-2">📺</span>
+            <span className="dash-menu-text">Écran Hall (Direct)</span>
+            <span className="badge bg-success ms-auto small" style={{ fontSize: '0.62rem', padding: '3px 6px' }}>Live</span>
+          </button>
           
           {canAccess(['DEE']) && (
             <button 
@@ -579,6 +590,14 @@ const DashboardHome = () => {
           <div className="d-flex align-items-center gap-2">
             <button
               type="button"
+              className={`btn btn-sm ${activeTab === 'ecran_hall' ? 'btn-primary' : 'btn-outline-primary'} d-flex align-items-center gap-1 shadow-sm`}
+              onClick={() => selectTab('ecran_hall')}
+              title="Aperçu en direct de l'Écran du Hall"
+            >
+              📺 <span className="d-none d-md-inline">Direct Hall</span>
+            </button>
+            <button
+              type="button"
               className="btn btn-sm btn-outline-success d-flex align-items-center gap-1 shadow-sm"
               onClick={handleExportJournal}
               disabled={exportingJournal}
@@ -588,6 +607,7 @@ const DashboardHome = () => {
             </button>
             <span className="dash-tab-badge d-none d-sm-inline-block">
               {activeTab === 'accueil' && '📊 Tableau de bord'}
+              {activeTab === 'ecran_hall' && '📺 Écran du Hall en direct'}
               {activeTab === 'planning' && '📋 Imports Plannings'}
               {activeTab === 'presences' && '👨‍🏫 Suivi des Présences'}
               {activeTab === 'alertes' && '🔔 Alertes & Salles'}
@@ -622,9 +642,20 @@ const DashboardHome = () => {
             <div className="col-12">
               <div className="dash-card p-4 mb-4">
                 <div className="card-header-accent bg-primary"></div>
-                <div className="card-body">
-                  <h4 className="fw-bold mb-3" style={{ color: '#0B4F6C' }}>Vue d'ensemble</h4>
-                  <p className="text-muted fs-5">Sélectionnez une option dans le menu latéral pour gérer l'affichage dynamique du Hall ESITH.</p>
+                <div className="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+                  <div>
+                    <h4 className="fw-bold mb-2" style={{ color: '#0B4F6C' }}>Vue d'ensemble</h4>
+                    <p className="text-muted fs-6 mb-0">Gérez et supervisez l'affichage dynamique du Hall ESITH en temps réel.</p>
+                  </div>
+                  <button 
+                    type="button" 
+                    className="btn btn-premium d-flex align-items-center gap-2 px-3 py-2"
+                    onClick={() => selectTab('ecran_hall')}
+                    title="Ouvrir la page de l'Écran du Hall"
+                  >
+                    <span>📺</span>
+                    <span className="fw-bold">Voir l'Écran TV en direct</span>
+                  </button>
                 </div>
               </div>
 
@@ -708,6 +739,13 @@ const DashboardHome = () => {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ÉCRAN DU HALL EN DIRECT */}
+          {activeTab === 'ecran_hall' && (
+            <div className="col-12">
+              <HallTvLivePreview />
             </div>
           )}
 
