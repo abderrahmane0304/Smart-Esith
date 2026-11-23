@@ -4,7 +4,6 @@ const HallTvLivePreview = () => {
   const [iframeKey, setIframeKey] = useState(Date.now());
   const [scale, setScale] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
   const containerRef = useRef(null);
@@ -61,14 +60,6 @@ const HallTvLivePreview = () => {
 
   const handleOpenNewTab = () => {
     window.open('/', '_blank');
-  };
-
-  const hallUrl = typeof window !== 'undefined' ? `${window.location.origin}/` : 'http://localhost:5001/';
-
-  const handleCopyUrl = () => {
-    navigator.clipboard.writeText(hallUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   const tvHeight = Math.round(1080 * scale);
@@ -236,80 +227,6 @@ const HallTvLivePreview = () => {
             </div>
           </div>
         )}
-      </div>
-
-      {/* Cartes d'informations & Diagnostics */}
-      <div className="row g-3">
-        <div className="col-12 col-md-6 col-lg-3">
-          <div className="dash-card p-3 h-100">
-            <div className="d-flex align-items-center gap-2 mb-2">
-              <span style={{ fontSize: '1.4rem' }}>📡</span>
-              <h6 className="fw-bold mb-0" style={{ color: '#0B4F6C' }}>Adresse de Diffusion</h6>
-            </div>
-            <p className="small text-muted mb-2">
-              L'URL directe de l'affichage pour les téléviseurs et navigateurs du réseau :
-            </p>
-            <div className="d-flex gap-1">
-              <input
-                type="text"
-                readOnly
-                value={hallUrl}
-                className="form-control form-control-sm font-monospace bg-light"
-                style={{ fontSize: '0.75rem' }}
-              />
-              <button
-                type="button"
-                className="btn btn-sm btn-outline-secondary text-nowrap px-2"
-                onClick={handleCopyUrl}
-                title="Copier l'URL"
-              >
-                {copied ? '✓ Copié !' : 'Copier'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-12 col-md-6 col-lg-3">
-          <div className="dash-card p-3 h-100">
-            <div className="d-flex align-items-center gap-2 mb-2">
-              <span style={{ fontSize: '1.4rem' }}>⏱️</span>
-              <h6 className="fw-bold mb-0" style={{ color: '#0B4F6C' }}>Cadence de Rotation</h6>
-            </div>
-            <ul className="small text-muted mb-0 ps-3">
-              <li><strong>6 secondes</strong> : Écran de bienvenue & date</li>
-              <li><strong>10 secondes</strong> : Chaque cycle (Licence, Ingénieur, Master)</li>
-              <li><strong>10s (ou sur-mesure)</strong> : Affiches événements</li>
-              <li><strong>Bandeau continu</strong> : Défilement des retards/absences</li>
-            </ul>
-          </div>
-        </div>
-
-        <div className="col-12 col-md-6 col-lg-3">
-          <div className="dash-card p-3 h-100">
-            <div className="d-flex align-items-center gap-2 mb-2">
-              <span style={{ fontSize: '1.4rem' }}>⚡</span>
-              <h6 className="fw-bold mb-0" style={{ color: '#0B4F6C' }}>Mise à Jour Instantanée</h6>
-            </div>
-            <p className="small text-muted mb-0">
-              Dès qu'un retard, une absence, un changement de salle ou une affiche est enregistré(e) dans ce Dashboard, l'écran TV se met à jour <strong>automatiquement au cycle suivant</strong>, sans redémarrer le système.
-            </p>
-          </div>
-        </div>
-
-        <div className="col-12 col-md-6 col-lg-3">
-          <div className="dash-card p-3 h-100">
-            <div className="d-flex align-items-center gap-2 mb-2">
-              <span style={{ fontSize: '1.4rem' }}>🍓</span>
-              <h6 className="fw-bold mb-0" style={{ color: '#0B4F6C' }}>Diffusion Raspberry Pi</h6>
-            </div>
-            <p className="small text-muted mb-2">
-              Pour lancer l'affichage sur la TV connectée en HDMI au Raspberry Pi 4 :
-            </p>
-            <code className="d-block p-1 bg-light text-dark rounded small border font-monospace text-center">
-              ./demarrer_smart_esith_kiosk.sh
-            </code>
-          </div>
-        </div>
       </div>
     </div>
   );
