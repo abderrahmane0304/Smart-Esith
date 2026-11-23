@@ -14,7 +14,7 @@ const SPLASH_MS = 6000;       // 6 s pour la page d'accueil (selon demande utili
 const ROTATION_MS = 10000;    // 10 s par cycle / page de cours (selon demande utilisateur)
 const FC_ROTATION_MS = 10000; // 10 s pour la Formation Continue (selon demande utilisateur)
 const EVENT_ROTATION_MS = 10000; // 10 s pour l'affiche d'événement en rotation
-const REFRESH_MS = 60000;    // rafraîchissement des données : 60 s
+const REFRESH_MS = 15000;    // rafraîchissement des données : 15 s (détection réactive des changements)
 let allData = null;
 let firstRenderDone = false;
 let isShowingSplash = true;
@@ -155,8 +155,14 @@ function showMainContent() {
 }
 
 function scheduleNextRotation(delayMs) {
-    if (rotationTimeout) clearTimeout(rotationTimeout);
-    rotationTimeout = setTimeout(stepRotation, delayMs);
+    if (rotationTimeout) {
+        clearTimeout(rotationTimeout);
+        rotationTimeout = null;
+    }
+    rotationTimeout = setTimeout(() => {
+        rotationTimeout = null;
+        stepRotation();
+    }, delayMs);
 }
 
 let currentPosterIndex = 0;
@@ -172,13 +178,15 @@ function renderPosterElement(poster, totalCount = 1, activeIdx = 0) {
         cycleTitle.innerText = poster.titre ? String(poster.titre).toUpperCase() : 'BIENVENUE À L\'ESITH';
     }
 
-    if (posterImg.src !== poster.media_path) {
+    const currentSrc = posterImg.getAttribute('src');
+    if (currentSrc !== poster.media_path) {
         posterImg.style.opacity = '0';
-        setTimeout(() => {
-            posterImg.src = poster.media_path;
-            posterImg.onload = () => { posterImg.style.opacity = '1'; };
-            posterImg.onerror = () => { posterImg.style.opacity = '1'; };
-        }, 120);
+        posterImg.onload = () => { posterImg.style.opacity = '1'; };
+        posterImg.onerror = () => { posterImg.style.opacity = '1'; };
+        posterImg.src = poster.media_path;
+        if (posterImg.complete && posterImg.naturalWidth > 0) {
+            posterImg.style.opacity = '1';
+        }
     } else {
         posterImg.style.opacity = '1';
     }
@@ -267,8 +275,14 @@ function getCycleDuration(cycleKey) {
 }
 
 function applyModeFige(poster) {
-    if (rotationTimeout) clearTimeout(rotationTimeout);
-    if (figeCarouselTimer) clearTimeout(figeCarouselTimer);
+    if (rotationTimeout) {
+        clearTimeout(rotationTimeout);
+        rotationTimeout = null;
+    }
+    if (figeCarouselTimer) {
+        clearTimeout(figeCarouselTimer);
+        figeCarouselTimer = null;
+    }
     document.body.classList.add('mode-fige');
     showMainContent();
 
@@ -308,8 +322,31 @@ function removeModeFige() {
         document.body.classList.remove('mode-fige');
         const posterContainer = document.getElementById('event-poster-container');
         if (posterContainer) posterContainer.style.display = 'none';
-        if (!rotationTimeout) {
-            scheduleNextRotation(500);
+
+        const legend = document.querySelector('.legend');
+        if (legend) legend.style.display = 'flex';
+
+        const footer = document.querySelector('footer');
+        if (footer && allData && allData.events && allData.events.length > 0) {
+            footer.style.display = 'block';
+        }
+
+        // Réinitialiser le timer de rotation s'il existait
+        if (rotationTimeout) {
+            clearTimeout(rotationTimeout);
+            rotationTimeout = null;
+        }
+
+        // Relancer immédiatement le premier cycle actif (ou affiche en rotation)
+        const active = getActiveCycleIndices();
+        if (active.length > 0) {
+            currentCycleIndex = active[0];
+            currentCyclePageIndex = 0;
+            showMainContent();
+            renderCycle();
+            scheduleNextRotation(getCycleDuration(cycles[currentCycleIndex]));
+        } else {
+            showSplashScreen();
         }
     }
 }
@@ -320,8 +357,9 @@ function stepRotation() {
         // S'il n'y a pas de visites ou séances programmées : afficher seulement la page d'accueil (splash)
         if (!isShowingSplash) {
             showSplashScreen();
+        } else {
+            scheduleNextRotation(SPLASH_MS);
         }
-        scheduleNextRotation(SPLASH_MS);
         return;
     }
 
@@ -784,7 +822,9 @@ function renderCycle() {
         while (attempts < cycles.length) {
             const cKey = cycles[currentCycleIndex];
             if (cKey === 'event') {
-                if (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation') {
+                const hasRotationPoster = (allData.event_posters && allData.event_posters.some(p => p.mode_affichage === 'rotation')) ||
+                                          (allData.event_poster && allData.event_poster.media_path && allData.event_poster.mode_affichage === 'rotation');
+                if (hasRotationPoster) {
                     foundCycle = true;
                     break;
                 }
@@ -806,7 +846,7 @@ function renderCycle() {
 
         if (!foundCycle) {
             showSplashScreen();
-            return;
+            return 0;
         }
     }
 
@@ -836,20 +876,33 @@ function renderCycle() {
 
     // ── Événement (Affiche d'accueil dans la rotation) ──
     if (cycleKey === 'event') {
-        yearColumns.style.display = 'none';
-        if (legend) legend.style.display = 'none';
-
         const rotationPosters = (allData && allData.event_posters && allData.event_posters.length > 0)
             ? allData.event_posters.filter(p => p.mode_affichage === 'rotation')
-            : (allData && allData.event_poster ? [allData.event_poster] : []);
+            : (allData && allData.event_poster && allData.event_poster.mode_affichage === 'rotation' ? [allData.event_poster] : []);
 
         if (rotationPosters.length > 0) {
+            yearColumns.style.display = 'none';
+            if (legend) legend.style.display = 'none';
+
             if (currentPosterIndex >= rotationPosters.length) currentPosterIndex = 0;
             const cur = rotationPosters[currentPosterIndex];
             renderPosterElement(cur, rotationPosters.length, currentPosterIndex);
             currentPosterIndex = (currentPosterIndex + 1) % rotationPosters.length;
+            return 1;
+        } else {
+            // Sécurité : si aucune affiche en rotation, restaurer les colonnes et passer au cycle suivant
+            yearColumns.style.display = 'flex';
+            if (posterContainer) posterContainer.style.display = 'none';
+            const active = getActiveCycleIndices();
+            const activePos = active.indexOf(currentCycleIndex);
+            if (activePos !== -1 && activePos + 1 < active.length) {
+                currentCycleIndex = active[activePos + 1];
+                return renderCycle();
+            } else {
+                showSplashScreen();
+                return 0;
+            }
         }
-        return 1;
     }
 
     // Réinitialisation pour les cycles de cours normaux
