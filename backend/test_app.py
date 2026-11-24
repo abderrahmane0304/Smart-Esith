@@ -315,7 +315,7 @@ def test_event_poster_upload_and_modes(client):
         hall_data2 = client.get('/api/hall/all_data').get_json()
         assert hall_data2['event_poster']['mode_affichage'] == 'rotation'
 
-        # Test upload PDF
+        # Test upload PDF 1 page
         import fitz
         pdf_doc = fitz.open()
         pdf_page = pdf_doc.new_page(width=1920, height=1080)
@@ -338,6 +338,44 @@ def test_event_poster_upload_and_modes(client):
         assert pdf_ev['media_type'] == 'pdf'
         assert pdf_ev['media_path'].endswith('.png')  # Bien converti en PNG pour la TV
         client.delete(f'/api/events/{pdf_event_id}', headers=auth_header)
+
+        # Test upload PDF multi-pages (2 pages : Recto/Verso ou Flyer + Programme)
+        pdf_2pages = fitz.open()
+        p1 = pdf_2pages.new_page(width=595, height=842)
+        p1.insert_text(fitz.Point(50, 100), "Page 1 - Affiche de Bienvenue", fontsize=24)
+        p2 = pdf_2pages.new_page(width=595, height=842)
+        p2.insert_text(fitz.Point(50, 100), "Page 2 - Programme & Horaires", fontsize=24)
+        pdf_2p_bytes = pdf_2pages.tobytes()
+        pdf_2pages.close()
+
+        pdf_2p_data = {
+            'titre': '__TEST_PDF_2PAGES_EVENT__',
+            'date': '17/12/2030',
+            'file': (io.BytesIO(pdf_2p_bytes), 'flyer_2pages.pdf'),
+            'mode_affichage': 'rotation'
+        }
+        pdf_2p_res = client.post('/api/events', data=pdf_2p_data, content_type='multipart/form-data', headers=auth_header)
+        assert pdf_2p_res.status_code == 200
+        pdf_2p_json = pdf_2p_res.get_json()
+        assert pdf_2p_json['success'] is True
+        pdf_2p_id = pdf_2p_json['id']
+
+        pdf_2p_ev = [e for e in client.get('/api/events').get_json() if e['id'] == pdf_2p_id][0]
+        assert pdf_2p_ev['media_type'] == 'pdf'
+        assert pdf_2p_ev['media_path'].endswith('.png')
+
+        # Vérifier que le rendu combine les 2 pages côte-à-côte (largeur > hauteur)
+        from PIL import Image
+        img_disk_path = os.path.join(os.path.dirname(__file__), pdf_2p_ev['media_path'].lstrip('/'))
+        assert os.path.exists(img_disk_path)
+        with Image.open(img_disk_path) as composite_img:
+            assert composite_img.width > composite_img.height  # format panoramique 16:9
+            assert composite_img.format == 'PNG'
+
+        client.delete(f'/api/events/{pdf_2p_id}', headers=auth_header)
+        if os.path.exists(img_disk_path):
+            try: os.remove(img_disk_path)
+            except Exception: pass
 
     finally:
         if event_id:

@@ -87,11 +87,14 @@ chmod -R 777 "$SCRIPT_DIR/backend/static/uploads" "$SCRIPT_DIR/backend/backups" 
 # Nettoyage du cache Chromium du profil Kiosk
 rm -rf /tmp/smart_esith_kiosk_*/Default/Cache /tmp/smart_esith_kiosk_*/Default/"Code Cache" 2>/dev/null || true
 
-# 5. Mise à jour des dépendances Python
-echo "📦 [5/5] Vérification des dépendances Python..."
+# 5. Mise à jour des dépendances Python & PDF
+echo "📦 [5/5] Vérification des dépendances Python & convertisseurs PDF..."
+if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get install -y --no-install-recommends python3-fitz poppler-utils 2>/dev/null || true
+fi
 if [ -f "$SCRIPT_DIR/backend/venv/bin/pip" ]; then
-    "$SCRIPT_DIR/backend/venv/bin/pip" install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet || "$SCRIPT_DIR/backend/venv/bin/pip" install Pillow openpyxl pymupdf --quiet || true
-    echo "   ✅ Dépendances Python à jour (Pillow, openpyxl, etc.)."
+    "$SCRIPT_DIR/backend/venv/bin/pip" install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet || "$SCRIPT_DIR/backend/venv/bin/pip" install Pillow openpyxl pymupdf pypdfium2 --quiet || true
+    echo "   ✅ Dépendances Python et PDF à jour (Pillow, PyMuPDF, etc.)."
 fi
 
 echo ""

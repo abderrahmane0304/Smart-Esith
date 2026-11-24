@@ -286,11 +286,13 @@ function applyModeFige(poster) {
     document.body.classList.add('mode-fige');
     showMainContent();
 
-    // Masque les cours
+    // Masque les cours et affiche le conteneur d'affiche
     const yearCols = document.getElementById('year-columns');
     if (yearCols) yearCols.style.display = 'none';
     const noCourses = document.getElementById('no-courses');
     if (noCourses) noCourses.style.display = 'none';
+    const posterContainer = document.getElementById('event-poster-container');
+    if (posterContainer) posterContainer.style.display = 'flex';
 
     const figePosters = (allData && allData.event_posters && allData.event_posters.length > 0)
         ? allData.event_posters.filter(p => p.mode_affichage === 'fige' || p.force_active)
@@ -883,6 +885,7 @@ function renderCycle() {
         if (rotationPosters.length > 0) {
             yearColumns.style.display = 'none';
             if (legend) legend.style.display = 'none';
+            if (posterContainer) posterContainer.style.display = 'flex';
 
             if (currentPosterIndex >= rotationPosters.length) currentPosterIndex = 0;
             const cur = rotationPosters[currentPosterIndex];

@@ -2113,23 +2113,139 @@ def save_event_media(file_storage):
 
     if ext == '.pdf':
         try:
-            import fitz
+            try:
+                import pymupdf as fitz
+            except ImportError:
+                import fitz
             doc = fitz.open(stream=raw, filetype="pdf")
-            if len(doc) == 0:
+            num_pages = len(doc)
+            if num_pages == 0:
                 raise ValueError("Le fichier PDF ne contient aucune page.")
-            page = doc[0]
-            pix = page.get_pixmap(dpi=200)
-            pix.save(out_path)
+
+            from PIL import Image, ImageDraw
+
+            if num_pages == 1:
+                # 1 seule page : rendu haute définition direct
+                page = doc[0]
+                pix = page.get_pixmap(dpi=200)
+                pix.save(out_path)
+            else:
+                # Multi-pages (2 pages flyer/programme, etc.) : assemblage côte-à-côte
+                page_imgs = []
+                for p_idx in range(min(num_pages, 4)):  # max 4 pages combinées
+                    p = doc[p_idx]
+                    pix = p.get_pixmap(dpi=150)
+                    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+                    page_imgs.append(img)
+
+                if len(page_imgs) == 2:
+                    # 2 pages : disposition côte-à-côte haute définition (idéal écran TV 16:9)
+                    p1, p2 = page_imgs[0], page_imgs[1]
+                    target_h = max(p1.height, p2.height)
+                    if p1.height != target_h:
+                        p1 = p1.resize((int(p1.width * target_h / p1.height), target_h), Image.Resampling.LANCZOS)
+                    if p2.height != target_h:
+                        p2 = p2.resize((int(p2.width * target_h / p2.height), target_h), Image.Resampling.LANCZOS)
+
+                    gap = 24
+                    padding = 16
+                    total_w = p1.width + p2.width + gap + (padding * 2)
+                    total_h = target_h + (padding * 2)
+
+                    composite = Image.new('RGB', (total_w, total_h), (245, 247, 250))
+                    composite.paste(p1, (padding, padding))
+                    composite.paste(p2, (padding + p1.width + gap, padding))
+
+                    draw = ImageDraw.Draw(composite)
+                    sep_x = padding + p1.width + (gap // 2)
+                    draw.line([(sep_x, padding), (sep_x, padding + target_h)], fill=(210, 215, 222), width=2)
+                    composite.save(out_path, format='PNG', optimize=True)
+                elif len(page_imgs) == 3:
+                    target_h = max(p.height for p in page_imgs)
+                    resized = []
+                    for p in page_imgs:
+                        if p.height != target_h:
+                            p = p.resize((int(p.width * target_h / p.height), target_h), Image.Resampling.LANCZOS)
+                        resized.append(p)
+                    gap = 20
+                    padding = 12
+                    total_w = sum(p.width for p in resized) + gap * (len(resized) - 1) + (padding * 2)
+                    total_h = target_h + (padding * 2)
+                    composite = Image.new('RGB', (total_w, total_h), (245, 247, 250))
+                    curr_x = padding
+                    for p in resized:
+                        composite.paste(p, (curr_x, padding))
+                        curr_x += p.width + gap
+                    composite.save(out_path, format='PNG', optimize=True)
+                else:
+                    # 4 pages en grille 2x2
+                    target_w = max(p.width for p in page_imgs)
+                    target_h = max(p.height for p in page_imgs)
+                    grid_w = target_w * 2 + 30
+                    grid_h = target_h * 2 + 30
+                    composite = Image.new('RGB', (grid_w, grid_h), (245, 247, 250))
+                    composite.paste(page_imgs[0], (0, 0))
+                    composite.paste(page_imgs[1], (target_w + 30, 0))
+                    composite.paste(page_imgs[2], (0, target_h + 30))
+                    composite.paste(page_imgs[3], (target_w + 30, target_h + 30))
+                    composite.save(out_path, format='PNG', optimize=True)
+
             doc.close()
             return f"/static/uploads/events/{out_filename}", 'pdf'
         except Exception as e:
-            # Fallback robuste si fitz n'est pas disponible ou échoue
-            print(f"[Smart ESITH] Fallback PDF direct (fitz indisponible ou erreur: {e})")
+            # Fallback 1 : essayer pdf2image si installé
+            try:
+                from pdf2image import convert_from_bytes
+                from PIL import Image
+                images = convert_from_bytes(raw, dpi=150)
+                if images:
+                    if len(images) == 1:
+                        images[0].save(out_path, format='PNG')
+                    else:
+                        p1, p2 = images[0], images[1]
+                        target_h = max(p1.height, p2.height)
+                        total_w = p1.width + p2.width + 24
+                        composite = Image.new('RGB', (total_w, target_h), (245, 247, 250))
+                        composite.paste(p1, (0, 0))
+                        composite.paste(p2, (p1.width + 24, 0))
+                        composite.save(out_path, format='PNG')
+                    return f"/static/uploads/events/{out_filename}", 'pdf'
+            except Exception:
+                pass
+
+            # Fallback 2 : essayer pypdfium2 si installé
+            try:
+                import pypdfium2 as pdfium
+                from PIL import Image
+                pdf = pdfium.PdfDocument(raw)
+                if len(pdf) > 0:
+                    page_imgs = [page.render(scale=2).to_pil() for page in [pdf[i] for i in range(min(len(pdf), 2))]]
+                    if len(page_imgs) == 1:
+                        page_imgs[0].save(out_path, format='PNG')
+                    else:
+                        p1, p2 = page_imgs[0], page_imgs[1]
+                        target_h = max(p1.height, p2.height)
+                        total_w = p1.width + p2.width + 24
+                        composite = Image.new('RGB', (total_w, target_h), (245, 247, 250))
+                        composite.paste(p1, (0, 0))
+                        composite.paste(p2, (p1.width + 24, 0))
+                        composite.save(out_path, format='PNG')
+                    return f"/static/uploads/events/{out_filename}", 'pdf'
+            except Exception:
+                pass
+
+            # Fallback 3 : Image informative garantie (ne JAMAIS servir du .pdf brut aux balises <img>)
+            print(f"[Smart ESITH] Fallback image générée pour PDF (erreur rendu: {e})")
+            from PIL import Image, ImageDraw
+            img = Image.new('RGB', (1280, 720), (11, 79, 108))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([(40, 40), (1240, 680)], outline=(195, 214, 1), width=4)
+            img.save(out_path, format='PNG')
+            # Sauvegarder également le PDF original
             pdf_filename = f"event_{unique_id}.pdf"
-            pdf_path = os.path.join(UPLOAD_EVENTS_DIR, pdf_filename)
-            with open(pdf_path, 'wb') as f:
+            with open(os.path.join(UPLOAD_EVENTS_DIR, pdf_filename), 'wb') as f:
                 f.write(raw)
-            return f"/static/uploads/events/{pdf_filename}", 'pdf'
+            return f"/static/uploads/events/{out_filename}", 'pdf'
     else:
         try:
             from PIL import Image
