@@ -367,6 +367,47 @@ def match_alert_to_session(alert_record, course, is_retard=False):
     return True
 
 
+def classify_filieres_by_cycle(filieres, db=None):
+    """Classe les filières académiques par cycle (Licence, Ingénieur, Master)."""
+    by_cycle = {
+        "Licence": [],
+        "Ingénieur": [],
+        "Master": []
+    }
+    filiere_cycle_map = {}
+    if db is not None:
+        try:
+            for (cyc, grp) in db.query(Cours.Cycle, Cours.groupe).filter(
+                Cours.Cycle.in_(['Licence', 'Ingénieur', 'Master'])
+            ).all():
+                if cyc and grp:
+                    for fil in extract_filieres_from_group(grp):
+                        if fil not in filiere_cycle_map:
+                            filiere_cycle_map[fil] = cyc
+        except Exception:
+            pass
+
+    for f in sorted(list(set(filieres))):
+        if not f:
+            continue
+        f_up = f.upper()
+        cyc = filiere_cycle_map.get(f_up)
+        if not cyc or cyc not in by_cycle:
+            cyc = detect_cycle('', f_up)
+        if cyc not in by_cycle:
+            if any(f_up.startswith(p) for p in ['GCL', 'GPH', 'DEH', 'GAS', 'GPT', 'LIC']):
+                cyc = 'Licence'
+            elif any(f_up.startswith(p) for p in ['MDM', 'MPTH', 'ELOG', 'HSE', 'MAS']):
+                cyc = 'Master'
+            else:
+                cyc = 'Ingénieur'
+        by_cycle[cyc].append(f_up)
+
+    for k in by_cycle:
+        by_cycle[k] = sorted(list(set(by_cycle[k])))
+    return by_cycle
+
+
 def get_active_planning_import(db, ref_date=None):
     """Retourne les métadonnées et données actives de l'import de planning Formation Initiale.
     Règle Empty State : Si aucun planning n'a été importé pour la période courante
@@ -419,6 +460,7 @@ def get_active_planning_import(db, ref_date=None):
                 "period_type": imp.period_type,
                 "professors": sorted([p for p in profs if p and p.strip()]),
                 "filieres": sorted([f for f in fils if f and f.strip()]),
+                "filieres_by_cycle": classify_filieres_by_cycle(fils, db),
                 "count_professors": len(profs),
                 "count_filieres": len(fils)
             }
@@ -434,6 +476,7 @@ def get_active_planning_import(db, ref_date=None):
         "period_type": None,
         "professors": [],
         "filieres": [],
+        "filieres_by_cycle": {"Licence": [], "Ingénieur": [], "Master": []},
         "count_professors": 0,
         "count_filieres": 0
     }
@@ -653,7 +696,8 @@ def cleanup_expired_records(db=None):
 
         for model in (Absence, Retard, ChangementSalle):
             for rec in db.query(model).all():
-                d = parse_date(rec.date)
+                end_str = getattr(rec, 'date_fin', None) or rec.date
+                d = parse_date(end_str)
                 if d is not None and d < today:
                     db.delete(rec)
                     deleted_alerts += 1
@@ -1368,8 +1412,13 @@ def get_attendance():
             continue
 
         c_fils = extract_filieres_from_group(c.groupe)
-        if filiere_query and filiere_query not in c_fils:
-            continue
+        if filiere_query:
+            if filiere_query.startswith('CYCLE:'):
+                target_cycle = filiere_query.split(':', 1)[1].strip().lower()
+                if clean(c.Cycle).lower() != target_cycle:
+                    continue
+            elif filiere_query not in c_fils:
+                continue
 
         p_key = (prof_name.lower(), c.date)
         matched_abs = abs_by_prof_date.get(p_key, [])
@@ -2293,16 +2342,59 @@ def declare_retard_absence(current_user):
         return jsonify({"error": "Type (ABSENCE/RETARD) et groupe obligatoires"}), 400
     db = get_db()
     cleanup_expired_records(db)
-    date_val = normalize_date(data.get('date')) if data.get('date') else today_str()
+    
+    raw_date = data.get('date_debut') or data.get('date')
+    date_val = normalize_date(raw_date) if raw_date else today_str()
+    raw_date_fin = data.get('date_fin')
+    date_fin_val = normalize_date(raw_date_fin) if raw_date_fin else None
+    
     heure = normalize_time(data.get('heure')) or clean(data.get('heure'))
     prof = clean(data.get('prof'))
+    motif = clean(data.get('motif'))
+    
     if typ == 'ABSENCE':
-        db.add(Absence(prof=prof, groupe=groupe, date=date_val, heure=heure, motif=clean(data.get('motif'))))
+        d_start = parse_date(date_val)
+        d_end = parse_date(date_fin_val) if date_fin_val else None
+        
+        # Période multi-jours : génère un enregistrement pour chaque jour ouvrable de la plage
+        if d_start and d_end and d_end > d_start:
+            if (d_end - d_start).days > 90:
+                return jsonify({"error": "La durée de l'absence ne peut dépasser 90 jours"}), 400
+            curr = d_start
+            count = 0
+            while curr <= d_end:
+                if curr.weekday() != 6:  # Exclut le dimanche
+                    day_str = curr.strftime('%d/%m/%Y')
+                    db.add(Absence(
+                        prof=prof,
+                        groupe=groupe,
+                        date=day_str,
+                        date_fin=date_fin_val,
+                        heure=heure,
+                        motif=motif
+                    ))
+                    count += 1
+                curr += datetime.timedelta(days=1)
+            db.commit()
+            log_action(db, current_user, "Déclaration ABSENCE (période)", f"Prof: {prof}, Groupe: {groupe}, Du {date_val} au {date_fin_val}, Heure: {heure} ({count} j)")
+            return jsonify({"success": True, "periode": f"Du {date_val} au {date_fin_val}", "nb_jours": count})
+        else:
+            db.add(Absence(
+                prof=prof,
+                groupe=groupe,
+                date=date_val,
+                date_fin=date_val,
+                heure=heure,
+                motif=motif
+            ))
+            db.commit()
+            log_action(db, current_user, f"Déclaration {typ}", f"Prof: {prof}, Groupe: {groupe}, Date: {date_val}, Heure: {heure}")
+            return jsonify({"success": True})
     else:
-        db.add(Retard(prof=prof, groupe=groupe, date=date_val, heure_prevue=heure, duree_retard=clean(data.get('motif'))))
-    db.commit()
-    log_action(db, current_user, f"Déclaration {typ}", f"Prof: {prof}, Groupe: {groupe}, Heure: {heure}")
-    return jsonify({"success": True})
+        db.add(Retard(prof=prof, groupe=groupe, date=date_val, heure_prevue=heure, duree_retard=motif))
+        db.commit()
+        log_action(db, current_user, f"Déclaration {typ}", f"Prof: {prof}, Groupe: {groupe}, Date: {date_val}, Heure: {heure}")
+        return jsonify({"success": True})
 
 
 @app.route('/api/changement-salle', methods=['POST'])
@@ -2351,7 +2443,15 @@ def _active_for_date(db, model):
 def get_absences():
     db = get_db()
     rows = _active_for_date(db, Absence)
-    return jsonify([{"id": a.id, "groupe": clean(a.groupe), "prof": clean(a.prof), "date": clean(a.date), "heure": clean(a.heure), "motif": clean(a.motif)} for a in rows])
+    return jsonify([{
+        "id": a.id,
+        "groupe": clean(a.groupe),
+        "prof": clean(a.prof),
+        "date": clean(a.date),
+        "date_fin": clean(getattr(a, 'date_fin', None)) or clean(a.date),
+        "heure": clean(a.heure),
+        "motif": clean(a.motif)
+    } for a in rows])
 
 
 @app.route('/api/absences/<int:id>', methods=['DELETE'])
@@ -2362,7 +2462,11 @@ def delete_absence(current_user, id):
     db = get_db()
     a = db.query(Absence).filter_by(id=id).first()
     if a:
-        a.actif = False
+        delete_all = request.args.get('delete_all', '').lower() in ('true', '1')
+        if delete_all and getattr(a, 'date_fin', None) and a.date_fin != a.date:
+            db.query(Absence).filter_by(prof=a.prof, groupe=a.groupe, date_fin=a.date_fin, actif=True).update({Absence.actif: False})
+        else:
+            a.actif = False
         db.commit()
         log_action(db, current_user, "Suppression absence", f"ID: {id}, Prof: {a.prof}, Groupe: {a.groupe}")
     return jsonify({"success": True})

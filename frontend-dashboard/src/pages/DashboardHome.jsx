@@ -21,9 +21,26 @@ const DashboardHome = () => {
   };
   const [eventListKey, setEventListKey] = useState(0);
   const [activeAlertes, setActiveAlertes] = useState({ retards: [], absences: [], salles: [] });
+
+  const getTodayIso = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const detectGroupCycle = (grp) => {
+    if (!grp) return 'Autre';
+    const s = String(grp).toUpperCase();
+    if (['GCL', 'GPH', 'DEH', 'GAS', 'GPT'].some(p => s.includes(p))) return 'Licence';
+    if (['MDM', 'MPTH', 'ELOG', 'HSE'].some(p => s.includes(p))) return 'Master';
+    if (['ITTI', 'IMS', 'CTM', 'EO', 'BDM', 'SL', 'INGTCG', 'CPTC', 'CPCP'].some(p => s.includes(p))) return 'Ingénieur';
+    return 'Autre';
+  };
   
   // Active planning period (professors & filières dynamiques)
-  const [activePeriod, setActivePeriod] = useState({ active: false, professors: [], filieres: [] });
+  const [activePeriod, setActivePeriod] = useState({ active: false, professors: [], filieres: [], filieres_by_cycle: {} });
   const [selectedFiliere, setSelectedFiliere] = useState('');
 
   // Suivi des présences hebdomadaires & Recherche
@@ -38,7 +55,15 @@ const DashboardHome = () => {
   const [backupActionLoading, setBackupActionLoading] = useState(false);
 
   // Forms states
-  const [raData, setRaData] = useState({ type: 'ABSENCE', groupe: '', heure: '', motif: '', prof: '' });
+  const [raData, setRaData] = useState({
+    type: 'ABSENCE',
+    groupe: '',
+    heure: '',
+    motif: '',
+    prof: '',
+    date_debut: getTodayIso(),
+    date_fin: ''
+  });
   const [salleData, setSalleData] = useState({ groupe: '', ancienneSalle: '', nouvelleSalle: '' });
   const [eventData, setEventData] = useState({ titre: '', date: '', date_fin: '', heure_debut: '', lieu: '', mode_affichage: 'rotation', force_active: false, duree_affichage_sec: 10 });
   const [eventFile, setEventFile] = useState(null);
@@ -266,13 +291,62 @@ const DashboardHome = () => {
     }
   }, [activeTab]);
 
+  const groupedGroupes = React.useMemo(() => {
+    const map = { Licence: [], Ingénieur: [], Master: [], Autre: [] };
+    (groupes || []).forEach(g => {
+      const cyc = detectGroupCycle(g);
+      (map[cyc] || map.Autre).push(g);
+    });
+    return map;
+  }, [groupes]);
+
+  const matchesSelectedFiliere = (itemGroupe) => {
+    if (!selectedFiliere) return true;
+    const grp = String(itemGroupe || '').toUpperCase();
+    if (selectedFiliere.startsWith('CYCLE:')) {
+      const cyc = selectedFiliere.split(':')[1];
+      const filList = activePeriod.filieres_by_cycle?.[cyc] || [];
+      return filList.some(fil => grp.includes(fil));
+    }
+    return grp.includes(selectedFiliere.toUpperCase());
+  };
+
   const handleRA = async (e) => {
     e.preventDefault();
     try {
-      await apiClient.post('/declare-retard-absence', raData);
-      showNotification(`${raData.type === 'ABSENCE' ? 'Absence' : 'Retard'} (${raData.prof || 'Professeur'}) déclaré avec succès pour le groupe ${raData.groupe}`, 'success');
-      setRaData({ ...raData, motif: '', heure: '', prof: '' });
+      const payload = {
+        type: raData.type,
+        prof: raData.prof,
+        groupe: raData.groupe,
+        heure: raData.heure,
+        motif: raData.motif,
+        date_debut: raData.date_debut,
+        date_fin: raData.type === 'ABSENCE' ? raData.date_fin : '',
+        date: raData.date_debut
+      };
+      const res = await apiClient.post('/declare-retard-absence', payload);
+      let successMsg = '';
+      if (raData.type === 'ABSENCE') {
+        if (raData.date_fin && raData.date_fin !== raData.date_debut) {
+          successMsg = `Absence (${raData.prof || 'Professeur'}) déclarée avec succès pour le groupe ${raData.groupe} (${res.data?.periode || `du ${raData.date_debut} au ${raData.date_fin}`})`;
+        } else {
+          successMsg = `Absence (${raData.prof || 'Professeur'}) déclarée avec succès pour le groupe ${raData.groupe} (${raData.date_debut})`;
+        }
+      } else {
+        successMsg = `Retard (${raData.prof || 'Professeur'}) déclaré avec succès pour le groupe ${raData.groupe} (${raData.date_debut})`;
+      }
+      showNotification(successMsg, 'success');
+      setRaData({
+        type: raData.type,
+        prof: '',
+        groupe: '',
+        heure: '',
+        motif: '',
+        date_debut: getTodayIso(),
+        date_fin: ''
+      });
       fetchAlertes();
+      fetchAttendance(attendanceSearch, selectedFiliere);
     } catch (err) {
       console.error(err);
       const detail = err.response?.data?.error || err.response?.data?.message || 'Erreur lors de la déclaration';
@@ -925,6 +999,59 @@ const DashboardHome = () => {
                             <option value="RETARD">Retard Professeur</option>
                           </select>
                         </div>
+
+                        {/* Plage de dates pour Absence / Date unique pour Retard */}
+                        {raData.type === 'ABSENCE' ? (
+                          <div className="row g-2 mb-3">
+                            <div className="col-12 col-md-6">
+                              <label className="form-label small fw-bold text-muted mb-1">Date de début *</label>
+                              <input
+                                type="date"
+                                className="dash-input w-100 form-control"
+                                required
+                                value={raData.date_debut}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setRaData(prev => ({
+                                    ...prev,
+                                    date_debut: val,
+                                    date_fin: prev.date_fin && prev.date_fin < val ? val : prev.date_fin
+                                  }));
+                                }}
+                              />
+                            </div>
+                            <div className="col-12 col-md-6">
+                              <label className="form-label small fw-bold text-muted mb-1">
+                                Date de fin <span className="text-muted fw-normal">(Optionnel)</span>
+                              </label>
+                              <input
+                                type="date"
+                                className="dash-input w-100 form-control"
+                                min={raData.date_debut}
+                                value={raData.date_fin}
+                                onChange={e => setRaData({ ...raData, date_fin: e.target.value })}
+                                placeholder="Identique au début si 1 jour"
+                              />
+                            </div>
+                            <div className="col-12">
+                              <small className="text-muted" style={{ fontSize: '0.74rem' }}>
+                                ℹ️ Si l'absence dure plusieurs jours, renseignez la date de fin. L'absence sera enregistrée pour chaque jour de la période (du lundi au samedi).
+                              </small>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mb-3">
+                            <label className="form-label small fw-bold text-muted mb-1">Date du retard *</label>
+                            <input
+                              type="date"
+                              className="dash-input w-100 form-control"
+                              required
+                              value={raData.date_debut}
+                              onChange={e => setRaData({ ...raData, date_debut: e.target.value })}
+                            />
+                          </div>
+                        )}
+
                         <div className="mb-3">
                           <label className="form-label small fw-bold text-muted mb-1">Professeur concerné *</label>
                           {activePeriod.active && activePeriod.professors.length > 0 ? (
@@ -949,6 +1076,7 @@ const DashboardHome = () => {
                           )}
                         </div>
                         <div className="mb-3">
+                          <label className="form-label small fw-bold text-muted mb-1">Groupe / Filière concerné(e) *</label>
                           {!raCustomGroup ? (
                             <select 
                               className="dash-input w-100 form-select" 
@@ -964,7 +1092,26 @@ const DashboardHome = () => {
                               required
                             >
                               <option value="">Sélectionner un groupe ({groupes.length} disponibles)</option>
-                              {groupes.map(g => <option key={g} value={g}>{g}</option>)}
+                              {groupedGroupes.Licence.length > 0 && (
+                                <optgroup label="🎓 Cycle Licence">
+                                  {groupedGroupes.Licence.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Ingénieur.length > 0 && (
+                                <optgroup label="⚙️ Cycle Ingénieur d'État">
+                                  {groupedGroupes.Ingénieur.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Master.length > 0 && (
+                                <optgroup label="🔬 Cycle Master">
+                                  {groupedGroupes.Master.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Autre.length > 0 && (
+                                <optgroup label="📚 Autres Formations">
+                                  {groupedGroupes.Autre.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
                               <option value="__custom__">➕ Autre groupe (saisie manuelle)...</option>
                             </select>
                           ) : (
@@ -1071,7 +1218,26 @@ const DashboardHome = () => {
                               required
                             >
                               <option value="">Sélectionner le groupe concerné ({groupes.length} disponibles)</option>
-                              {groupes.map(g => <option key={g} value={g}>{g}</option>)}
+                              {groupedGroupes.Licence.length > 0 && (
+                                <optgroup label="🎓 Cycle Licence">
+                                  {groupedGroupes.Licence.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Ingénieur.length > 0 && (
+                                <optgroup label="⚙️ Cycle Ingénieur d'État">
+                                  {groupedGroupes.Ingénieur.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Master.length > 0 && (
+                                <optgroup label="🔬 Cycle Master">
+                                  {groupedGroupes.Master.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
+                              {groupedGroupes.Autre.length > 0 && (
+                                <optgroup label="📚 Autres Formations">
+                                  {groupedGroupes.Autre.map(g => <option key={g} value={g}>{g}</option>)}
+                                </optgroup>
+                              )}
                               <option value="__custom__">➕ Autre groupe (saisie manuelle)...</option>
                             </select>
                           ) : (
@@ -1140,19 +1306,40 @@ const DashboardHome = () => {
 
                       {/* Filtre par filière issu du planning importé */}
                       <div className="d-flex align-items-center gap-2 mb-4 p-2 bg-light rounded border flex-wrap">
-                        <span className="small fw-bold text-muted">🏷️ Filtrer par Filière :</span>
-                        {activePeriod.active && activePeriod.filieres.length > 0 ? (
-                          <div className="d-flex align-items-center gap-2">
+                        <span className="small fw-bold text-muted">🏷️ Filtrer par Filière / Cycle :</span>
+                        {activePeriod.active && (activePeriod.filieres?.length > 0 || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) ? (
+                          <div className="d-flex align-items-center gap-2 flex-wrap">
                             <select
                               className="form-select form-select-sm"
-                              style={{ minWidth: '180px' }}
+                              style={{ minWidth: '220px', maxWidth: '340px' }}
                               value={selectedFiliere}
                               onChange={e => setSelectedFiliere(e.target.value)}
                             >
-                              <option value="">Toutes les filières ({activePeriod.filieres.length})</option>
-                              {activePeriod.filieres.map(f => (
-                                <option key={f} value={f}>{f}</option>
-                              ))}
+                              <option value="">Toutes les filières ({activePeriod.filieres?.length || 0})</option>
+                              {activePeriod.filieres_by_cycle?.Licence?.length > 0 && (
+                                <optgroup label="🎓 Cycle Licence">
+                                  <option value="CYCLE:Licence">Tous les cours Licence ({activePeriod.filieres_by_cycle.Licence.length} filières)</option>
+                                  {activePeriod.filieres_by_cycle.Licence.map(f => (
+                                    <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              {activePeriod.filieres_by_cycle?.Ingénieur?.length > 0 && (
+                                <optgroup label="⚙️ Cycle Ingénieur d'État">
+                                  <option value="CYCLE:Ingénieur">Tous les cours Ingénieur ({activePeriod.filieres_by_cycle.Ingénieur.length} filières)</option>
+                                  {activePeriod.filieres_by_cycle.Ingénieur.map(f => (
+                                    <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              {activePeriod.filieres_by_cycle?.Master?.length > 0 && (
+                                <optgroup label="🔬 Cycle Master">
+                                  <option value="CYCLE:Master">Tous les cours Master ({activePeriod.filieres_by_cycle.Master.length} filières)</option>
+                                  {activePeriod.filieres_by_cycle.Master.map(f => (
+                                    <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                  ))}
+                                </optgroup>
+                              )}
                             </select>
                             {selectedFiliere && (
                               <button
@@ -1168,7 +1355,11 @@ const DashboardHome = () => {
                           <span className="badge bg-secondary">Aucune filière dans le planning actif</span>
                         )}
                         {selectedFiliere && (
-                          <span className="badge bg-primary ms-auto">Filière sélectionnée : {selectedFiliere}</span>
+                          <span className="badge bg-primary ms-auto">
+                            {selectedFiliere.startsWith('CYCLE:')
+                              ? `Cycle : ${selectedFiliere.split(':')[1]}`
+                              : `Filière : ${selectedFiliere}`}
+                          </span>
                         )}
                       </div>
 
@@ -1176,19 +1367,22 @@ const DashboardHome = () => {
                         {/* Retards */}
                         <div>
                           <h6 className="fw-bold text-warning mb-3">
-                            ⏱️ Retards Professeurs ({activeAlertes.retards.filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                            ⏱️ Retards Professeurs ({activeAlertes.retards.filter(r => matchesSelectedFiliere(r.groupe)).length})
                           </h6>
-                          {activeAlertes.retards.filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                          {activeAlertes.retards.filter(r => matchesSelectedFiliere(r.groupe)).length === 0 ? (
                             <p className="text-muted small">Aucun retard déclaré {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
                               {activeAlertes.retards
-                                .filter(r => !selectedFiliere || (r.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .filter(r => matchesSelectedFiliere(r.groupe))
                                 .map(r => (
                                 <li key={r.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
                                     <span className="fw-bold">{r.prof}</span> <span className="badge bg-secondary ms-1">{r.groupe}</span>
-                                    <div className="text-muted small">Heure: {r.heure_prevue} • Retard: {r.duree_retard || 'Non précisé'}</div>
+                                    <div className="text-muted small">
+                                      <span className="badge bg-light text-dark border me-1">📅 {r.date}</span>
+                                      Heure: {r.heure_prevue} • Retard: {r.duree_retard || 'Non précisé'}
+                                    </div>
                                   </div>
                                   <button className="btn btn-sm btn-outline-danger flex-shrink-0" onClick={() => handleDeleteRetard(r.id)}>Supprimer</button>
                                 </li>
@@ -1200,19 +1394,26 @@ const DashboardHome = () => {
                         {/* Absences */}
                         <div>
                           <h6 className="fw-bold text-danger mb-3">
-                            🚫 Absences Professeurs ({activeAlertes.absences.filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                            🚫 Absences Professeurs ({activeAlertes.absences.filter(a => matchesSelectedFiliere(a.groupe)).length})
                           </h6>
-                          {activeAlertes.absences.filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                          {activeAlertes.absences.filter(a => matchesSelectedFiliere(a.groupe)).length === 0 ? (
                             <p className="text-muted small">Aucune absence déclarée {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
                               {activeAlertes.absences
-                                .filter(a => !selectedFiliere || (a.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .filter(a => matchesSelectedFiliere(a.groupe))
                                 .map(a => (
                                 <li key={a.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
                                     <span className="fw-bold">{a.prof}</span> <span className="badge bg-secondary ms-1">{a.groupe}</span>
-                                    <div className="text-muted small">Heure: {a.heure} • Motif: {a.motif || 'Non précisé'}</div>
+                                    <div className="text-muted small">
+                                      {a.date_fin && a.date_fin !== a.date ? (
+                                        <span className="badge bg-danger-subtle text-danger border border-danger-subtle me-1">📅 Du {a.date} au {a.date_fin}</span>
+                                      ) : (
+                                        <span className="badge bg-light text-dark border me-1">📅 {a.date}</span>
+                                      )}
+                                      Heure: {a.heure} • Motif: {a.motif || 'Non précisé'}
+                                    </div>
                                   </div>
                                   <button className="btn btn-sm btn-outline-danger flex-shrink-0" onClick={() => handleDeleteAbsence(a.id)}>Supprimer</button>
                                 </li>
@@ -1224,14 +1425,14 @@ const DashboardHome = () => {
                         {/* Changements de Salle */}
                         <div>
                           <h6 className="fw-bold mb-3" style={{ color: '#145a32' }}>
-                            📍 Changements de Salle ({activeAlertes.salles.filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere)).length})
+                            📍 Changements de Salle ({activeAlertes.salles.filter(s => matchesSelectedFiliere(s.groupe)).length})
                           </h6>
-                          {activeAlertes.salles.filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere)).length === 0 ? (
+                          {activeAlertes.salles.filter(s => matchesSelectedFiliere(s.groupe)).length === 0 ? (
                             <p className="text-muted small">Aucun changement de salle {selectedFiliere ? `pour ${selectedFiliere}` : ''}</p>
                           ) : (
                             <ul className="list-group list-group-flush">
                               {activeAlertes.salles
-                                .filter(s => !selectedFiliere || (s.groupe || '').toUpperCase().includes(selectedFiliere))
+                                .filter(s => matchesSelectedFiliere(s.groupe))
                                 .map(s => (
                                 <li key={s.id} className="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2 px-0 py-2 border-bottom">
                                   <div className="text-break me-2">
@@ -1346,9 +1547,9 @@ const DashboardHome = () => {
                       </div>
                     )}
 
-                    {activePeriod.active && activePeriod.filieres.length > 0 && (
-                      <div className="col-12 col-md-2">
-                        <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière :</label>
+                    {activePeriod.active && (activePeriod.filieres?.length > 0 || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) && (
+                      <div className="col-12 col-md-3">
+                        <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière / cycle :</label>
                         <select
                           className="form-select form-select-sm"
                           value={selectedFiliere}
@@ -1357,10 +1558,31 @@ const DashboardHome = () => {
                             fetchAttendance(attendanceSearch, e.target.value);
                           }}
                         >
-                          <option value="">Toutes filières</option>
-                          {activePeriod.filieres.map(f => (
-                            <option key={f} value={f}>{f}</option>
-                          ))}
+                          <option value="">Toutes les filières ({activePeriod.filieres?.length || 0})</option>
+                          {activePeriod.filieres_by_cycle?.Licence?.length > 0 && (
+                            <optgroup label="🎓 Cycle Licence">
+                              <option value="CYCLE:Licence">Tous les cours Licence ({activePeriod.filieres_by_cycle.Licence.length} filières)</option>
+                              {activePeriod.filieres_by_cycle.Licence.map(f => (
+                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {activePeriod.filieres_by_cycle?.Ingénieur?.length > 0 && (
+                            <optgroup label="⚙️ Cycle Ingénieur d'État">
+                              <option value="CYCLE:Ingénieur">Tous les cours Ingénieur ({activePeriod.filieres_by_cycle.Ingénieur.length} filières)</option>
+                              {activePeriod.filieres_by_cycle.Ingénieur.map(f => (
+                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {activePeriod.filieres_by_cycle?.Master?.length > 0 && (
+                            <optgroup label="🔬 Cycle Master">
+                              <option value="CYCLE:Master">Tous les cours Master ({activePeriod.filieres_by_cycle.Master.length} filières)</option>
+                              {activePeriod.filieres_by_cycle.Master.map(f => (
+                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                              ))}
+                            </optgroup>
+                          )}
                         </select>
                       </div>
                     )}

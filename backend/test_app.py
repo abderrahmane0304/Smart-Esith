@@ -918,5 +918,87 @@ def test_owasp_a08_magic_bytes_file_upload_validation(client):
     assert 'non conforme' in res.get_json().get('error', '')
 
 
+def test_multiday_absence_declaration_and_cycle_filieres(client):
+    """Vérifie la déclaration d'absence sur une plage de dates (date_debut à date_fin)
+    et la classification/filtrage des filières par cycle (Licence, Ingénieur, Master).
+    """
+    login_res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin2024'})
+    token = login_res.get_json()['token']
+    auth_header = {'Authorization': f'Bearer {token}'}
+
+    # 1. Test déclaration absence multi-jours (ex: 24/11/2026 au 26/11/2026 = 3 jours)
+    test_prof = "PROF_MULTIDAY_TEST"
+    payload = {
+        "type": "ABSENCE",
+        "prof": test_prof,
+        "groupe": "GCL2G1",
+        "date_debut": "2026-11-24",
+        "date_fin": "2026-11-26",
+        "heure": "Toute la journée",
+        "motif": "Mission pédagogique"
+    }
+    decl_res = client.post('/api/declare-retard-absence', json=payload, headers=auth_header)
+    assert decl_res.status_code == 200
+    data = decl_res.get_json()
+    assert data['success'] is True
+    assert data.get('nb_jours') == 3
+
+    # Vérification dans la BDD : 3 enregistrements créés
+    db = SessionLocal()
+    try:
+        abs_list = db.query(Absence).filter_by(prof=test_prof, actif=True).all()
+        assert len(abs_list) == 3
+        dates_created = {a.date for a in abs_list}
+        assert dates_created == {"24/11/2026", "25/11/2026", "26/11/2026"}
+        for a in abs_list:
+            assert a.date_fin == "26/11/2026"
+
+        # 2. Test classification des filières par cycle
+        from app import classify_filieres_by_cycle
+        test_fils = ["GCL", "GPH", "DEH", "ITTI", "IMS", "BDM", "MDM", "HSE"]
+        grouped = classify_filieres_by_cycle(test_fils, db)
+        assert "GCL" in grouped["Licence"]
+        assert "DEH" in grouped["Licence"]
+        assert "ITTI" in grouped["Ingénieur"]
+        assert "IMS" in grouped["Ingénieur"]
+        assert "MDM" in grouped["Master"]
+        assert "HSE" in grouped["Master"]
+
+        # 3. Test endpoint /api/dashboard/active-period-data avec filieres_by_cycle
+        period_res = client.get('/api/dashboard/active-period-data')
+        assert period_res.status_code == 200
+        p_data = period_res.get_json()
+        assert 'filieres_by_cycle' in p_data
+
+        # 4. Test filtrage de suivi des présences par cycle
+        c_lic = Cours(date="24/11/2026", hd="08:30", hf="10:00", prof="PROF_CYC_TEST", groupe="GCL1G1", module="Logistique", salle="S1", Cycle="Licence")
+        c_ing = Cours(date="24/11/2026", hd="10:15", hf="11:45", prof="PROF_CYC_TEST", groupe="ITTI1G1", module="Textile", salle="S2", Cycle="Ingénieur")
+        db.add_all([c_lic, c_ing])
+        db.commit()
+
+        # Filtrer uniquement Licence
+        res_lic = client.get('/api/dashboard/attendance?filiere=CYCLE:Licence&date_start=24/11/2026&date_end=24/11/2026')
+        assert res_lic.status_code == 200
+        p_lic = next((p for p in res_lic.get_json()['professors'] if p['prof'] == 'PROF_CYC_TEST'), None)
+        assert p_lic is not None
+        assert len(p_lic['sessions']) == 1
+        assert p_lic['sessions'][0]['groupe'] == 'GCL1G1'
+
+        # Filtrer uniquement Ingénieur
+        res_ing = client.get('/api/dashboard/attendance?filiere=CYCLE:Ingénieur&date_start=24/11/2026&date_end=24/11/2026')
+        assert res_ing.status_code == 200
+        p_ing = next((p for p in res_ing.get_json()['professors'] if p['prof'] == 'PROF_CYC_TEST'), None)
+        assert p_ing is not None
+        assert len(p_ing['sessions']) == 1
+        assert p_ing['sessions'][0]['groupe'] == 'ITTI1G1'
+
+    finally:
+        db.query(Absence).filter_by(prof=test_prof).delete()
+        db.query(Cours).filter_by(prof="PROF_CYC_TEST").delete()
+        db.commit()
+        db.close()
+
+
+
 
 

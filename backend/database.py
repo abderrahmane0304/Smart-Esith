@@ -68,6 +68,7 @@ class Absence(Base):
     prof = Column(String)
     groupe = Column(String)
     date = Column(String, nullable=False)
+    date_fin = Column(String, nullable=True)
     heure = Column(String)
     motif = Column(String)
     actif = Column(Boolean, default=True)
