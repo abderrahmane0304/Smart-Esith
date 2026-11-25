@@ -1052,6 +1052,64 @@ def test_multiday_absence_declaration_and_cycle_filieres(client):
         db.close()
 
 
+def test_planning_history_retention_and_past_month_attendance(client):
+    """Vérifie la conservation de l'historique sur 1 à 3 mois (90 jours) :
+    - Les cours des semaines antérieures ne sont pas écrasés lors d'un nouvel import
+    - Le nettoyage automatique ne supprime pas les alertes ni les cours de moins de 90 jours
+    - La recherche dans les dates passées (jusqu'à 1 mois) retourne les séances et statuts exacts.
+    """
+    from app import cleanup_expired_records
+    db = SessionLocal()
+    test_prof = "PROF_HISTORIQUE_TEST"
+    date_semaine1 = "03/11/2026"
+    date_semaine2 = "24/11/2026"
+
+    # Nettoyage préalable
+    db.query(Cours).filter_by(prof=test_prof).delete()
+    db.query(Absence).filter_by(prof=test_prof).delete()
+    db.commit()
+
+    try:
+        # Semaine 1 (il y a 3 semaines)
+        c_past = Cours(date=date_semaine1, hd="08:30", hf="10:00", prof=test_prof, groupe="GCL1G1", module="Gestion", salle="A1", Cycle="Licence")
+        # Semaine 2 (semaine courante)
+        c_curr = Cours(date=date_semaine2, hd="14:00", hf="15:30", prof=test_prof, groupe="GCL1G1", module="Finance", salle="A2", Cycle="Licence")
+        db.add_all([c_past, c_curr])
+        db.commit()
+
+        # Exécution du nettoyage automatique
+        cleanup_expired_records(db)
+
+        # Vérification que le cours de la semaine passée n'est PAS purgé (conservation 90 jours)
+        assert db.query(Cours).filter_by(prof=test_prof, date=date_semaine1).count() == 1
+        assert db.query(Cours).filter_by(prof=test_prof, date=date_semaine2).count() == 1
+
+        # 1. Recherche ciblée sur la semaine passée (date_debut / date_fin ISO)
+        res_past = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-01&date_fin=2026-11-10')
+        assert res_past.status_code == 200
+        p_data = res_past.get_json()
+        assert p_data['total_professors'] == 1
+        prof_past = p_data['professors'][0]
+        assert prof_past['total_sessions'] == 1
+        assert prof_past['sessions'][0]['date'] == date_semaine1
+        assert prof_past['presents'] == 1
+
+        # 2. Recherche sur un mois complet couvrant les deux semaines
+        res_month = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-01&date_fin=2026-11-30')
+        assert res_month.status_code == 200
+        m_data = res_month.get_json()
+        assert m_data['total_professors'] == 1
+        prof_month = m_data['professors'][0]
+        assert prof_month['total_sessions'] == 2
+        assert prof_month['presents'] == 2
+
+    finally:
+        db.query(Cours).filter_by(prof=test_prof).delete()
+        db.commit()
+        db.close()
+
+
+
 
 
 

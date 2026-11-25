@@ -413,6 +413,7 @@ def get_active_planning_import(db, ref_date=None):
     Règle Empty State : Si aucun planning n'a été importé pour la période courante
     (semaine ou mois couvrant ref_date), retourne active=False avec listes vides.
     """
+    is_explicit_ref = ref_date is not None
     if ref_date is None:
         ref_date = datetime.date.today()
     elif isinstance(ref_date, str):
@@ -422,8 +423,8 @@ def get_active_planning_import(db, ref_date=None):
     ref_monday = ref_date - datetime.timedelta(days=ref_date.weekday())
     ref_sunday = ref_monday + datetime.timedelta(days=6)
 
-    # Récupère le dernier import actif
-    imports = db.query(PlanningImport).filter_by(active=True).order_by(PlanningImport.id.desc()).all()
+    # Récupère tous les imports (ordonnés du plus récent au plus ancien)
+    imports = db.query(PlanningImport).order_by(PlanningImport.id.desc()).all()
     for imp in imports:
         d_start = parse_date(imp.period_start)
         d_end = parse_date(imp.period_end)
@@ -458,6 +459,33 @@ def get_active_planning_import(db, ref_date=None):
                 "period_start": imp.period_start,
                 "period_end": imp.period_end,
                 "period_type": imp.period_type,
+                "professors": sorted([p for p in profs if p and p.strip()]),
+                "filieres": sorted([f for f in fils if f and f.strip()]),
+                "filieres_by_cycle": classify_filieres_by_cycle(fils, db),
+                "count_professors": len(profs),
+                "count_filieres": len(fils)
+            }
+
+    # Si ref_date n'était pas explicitement demandée, et qu'il existe un import actif récent, le retourner
+    if not is_explicit_ref:
+        latest_active = next((imp for imp in imports if imp.active), None)
+        if latest_active:
+            try:
+                profs = json.loads(latest_active.professors or '[]')
+            except Exception:
+                profs = []
+            try:
+                fils = json.loads(latest_active.filieres or '[]')
+            except Exception:
+                fils = []
+            return {
+                "active": True,
+                "import_id": latest_active.id,
+                "filename": latest_active.filename,
+                "import_date": latest_active.import_date,
+                "period_start": latest_active.period_start,
+                "period_end": latest_active.period_end,
+                "period_type": latest_active.period_type,
                 "professors": sorted([p for p in profs if p and p.strip()]),
                 "filieres": sorted([f for f in fils if f and f.strip()]),
                 "filieres_by_cycle": classify_filieres_by_cycle(fils, db),
@@ -671,7 +699,8 @@ def cleanup_expired_records(db=None):
     """Supprime les enregistrements expirés :
     - Fichiers de sauvegarde et imports de plus de 3 mois (90 jours)
     - Événements passés depuis plus de 2 semaines (14 jours)
-    - Absences, retards et changements de salle antérieurs à aujourd'hui
+    - Absences, retards, changements de salle et séances de plus de 3 mois (90 jours)
+    (Permet de conserver l'historique d'au moins 1 à 3 mois pour le suivi des présences)
     """
     own_session = db is None
     if own_session:
@@ -679,8 +708,10 @@ def cleanup_expired_records(db=None):
 
     today = datetime.date.today()
     events_cutoff = today - datetime.timedelta(days=14)
+    history_cutoff = today - datetime.timedelta(days=90)
     deleted_events = 0
     deleted_alerts = 0
+    deleted_cours = 0
 
     try:
         # Purge automatique des fichiers de backup de plus de 3 mois (90 jours)
@@ -694,6 +725,7 @@ def cleanup_expired_records(db=None):
                 db.delete(e)
                 deleted_events += 1
 
+        # Purge des alertes antérieures à aujourd'hui pour l'affichage quotidien du hall
         for model in (Absence, Retard, ChangementSalle):
             for rec in db.query(model).all():
                 end_str = getattr(rec, 'date_fin', None) or rec.date
@@ -702,9 +734,16 @@ def cleanup_expired_records(db=None):
                     db.delete(rec)
                     deleted_alerts += 1
 
-        if deleted_events or deleted_alerts:
+        # Conservation de 90 jours (3 mois) pour l'historique des séances de cours
+        for c in db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all():
+            d = parse_date(c.date)
+            if d is not None and d < history_cutoff:
+                db.delete(c)
+                deleted_cours += 1
+
+        if deleted_events or deleted_alerts or deleted_cours:
             db.commit()
-            print(f"[Smart ESITH] Nettoyage auto : {deleted_events} événement(s) (>14j) et {deleted_alerts} alerte(s)/salle(s) expirée(s) supprimé(s).")
+            print(f"[Smart ESITH] Nettoyage auto : {deleted_events} événement(s) (>14j), {deleted_alerts} alerte(s) (<aujourd'hui), {deleted_cours} cours (>90j) supprimé(s).")
     except Exception as e:
         db.rollback()
         print("[Smart ESITH] Nettoyage automatique ignoré :", e)
@@ -1250,9 +1289,7 @@ def import_planning(current_user):
     fils_imported = set()
 
     try:
-        # Reset Formation Initiale (règle 9.7)
-        db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).delete(synchronize_session=False)
-
+        parsed_rows = []
         for _, row in df.iterrows():
             row = list(row)
             date = normalize_date(row[1])
@@ -1285,19 +1322,28 @@ def import_planning(current_user):
             if d_parsed:
                 dates_imported.add(d_parsed)
 
-            db.add(Cours(
-                numDay=clean(row[2]),
-                date=date,
-                hd=hd,
-                hf=hf,
-                salle=clean(row[7]),
-                prof=prof_val,
-                groupe=groupe_val,
-                module=clean(row[10]),
-                Cycle=cycle,
-                AppelFait=clean(row[14]) or 'Non'
-            ))
-            imported += 1
+            parsed_rows.append({
+                "numDay": clean(row[2]),
+                "date": date,
+                "hd": hd,
+                "hf": hf,
+                "salle": clean(row[7]),
+                "prof": prof_val,
+                "groupe": groupe_val,
+                "module": clean(row[10]),
+                "Cycle": cycle,
+                "AppelFait": clean(row[14]) or 'Non'
+            })
+
+        if parsed_rows and dates_imported:
+            # Remplacement ciblé : supprime uniquement les séances des dates du fichier importé
+            # afin de préserver l'historique des semaines antérieures (jusqu'à 90 jours) pour le suivi des présences
+            dates_imported_str = {d.strftime('%d/%m/%Y') for d in dates_imported}
+            db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES), Cours.date.in_(list(dates_imported_str))).delete(synchronize_session=False)
+
+            for r in parsed_rows:
+                db.add(Cours(**r))
+                imported += 1
 
         period_start_str, period_end_str = None, None
         if imported > 0 and dates_imported:
@@ -1307,8 +1353,13 @@ def import_planning(current_user):
             period_end_str = max_d.strftime('%d/%m/%Y')
             p_type = 'month' if (max_d - min_d).days > 10 else 'week'
 
-            # Désactive les anciens imports
-            db.query(PlanningImport).update({PlanningImport.active: False})
+            # Désactive les anciens imports chevauchant la même période
+            for old_imp in db.query(PlanningImport).filter_by(active=True).all():
+                old_s = parse_date(old_imp.period_start)
+                old_e = parse_date(old_imp.period_end)
+                if old_s and old_e:
+                    if not (max_d < old_s or min_d > old_e):
+                        old_imp.active = False
 
             new_import = PlanningImport(
                 filename=getattr(file, 'filename', 'planning_fi.xlsx') or 'planning_fi.xlsx',

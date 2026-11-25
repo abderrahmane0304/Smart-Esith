@@ -38,6 +38,24 @@ const DashboardHome = () => {
     return dStr;
   };
 
+  const getLast30DaysIso = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const getPreviousMonthRangeIso = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
+    const fStr = `${firstDay.getFullYear()}-${String(firstDay.getMonth() + 1).padStart(2, '0')}-${String(firstDay.getDate()).padStart(2, '0')}`;
+    const lStr = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    return { start: fStr, end: lStr };
+  };
+
   const detectGroupCycle = (grp) => {
     if (!grp) return 'Autre';
     const s = String(grp).toUpperCase();
@@ -1515,7 +1533,7 @@ const DashboardHome = () => {
                   {/* Section des Filtres de Dates et Recherche */}
                   <div className="p-3 mb-4 rounded border bg-light shadow-sm">
                     {/* Ligne 1 : Filtre par Période (Date Début & Date Fin) */}
-                    <div className="row g-2 align-items-end mb-3">
+                    <div className="row g-2 align-items-end mb-2">
                       <div className="col-12 col-sm-6 col-md-3">
                         <label className="form-label small fw-bold mb-1" style={{ color: '#0B4F6C' }}>
                           📅 Date début :
@@ -1525,7 +1543,9 @@ const DashboardHome = () => {
                           className="dash-input form-control form-control-sm"
                           value={attendanceDateStart}
                           onChange={e => {
-                            setAttendanceDateStart(e.target.value);
+                            const newStart = e.target.value;
+                            setAttendanceDateStart(newStart);
+                            fetchAttendance(attendanceSearch, selectedFiliere, newStart, attendanceDateEnd);
                           }}
                         />
                       </div>
@@ -1538,12 +1558,23 @@ const DashboardHome = () => {
                           className="dash-input form-control form-control-sm"
                           value={attendanceDateEnd}
                           onChange={e => {
-                            setAttendanceDateEnd(e.target.value);
+                            const newEnd = e.target.value;
+                            setAttendanceDateEnd(newEnd);
+                            fetchAttendance(attendanceSearch, selectedFiliere, attendanceDateStart, newEnd);
                           }}
                         />
                       </div>
-                      <div className="col-12 col-md-6 d-flex gap-2 flex-wrap">
-                        {activePeriod.active && activePeriod.period_start && activePeriod.period_end && (
+                      <div className="col-12 col-md-6 d-flex gap-2 flex-wrap align-items-center">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary fw-bold px-3 d-flex align-items-center gap-1 shadow-sm"
+                          onClick={() => fetchAttendance(attendanceSearch, selectedFiliere, attendanceDateStart, attendanceDateEnd)}
+                          title="Appliquer immédiatement les filtres de dates"
+                        >
+                          <span>🔍</span>
+                          <span>Filtrer</span>
+                        </button>
+                        {activePeriod.period_start && activePeriod.period_end && (
                           <button
                             type="button"
                             className="btn btn-sm btn-outline-primary"
@@ -1559,6 +1590,33 @@ const DashboardHome = () => {
                             📅 Période active ({activePeriod.period_start} - {activePeriod.period_end})
                           </button>
                         )}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-secondary"
+                          onClick={() => {
+                            const todayIso = getTodayIso();
+                            const last30 = getLast30DaysIso();
+                            setAttendanceDateStart(last30);
+                            setAttendanceDateEnd(todayIso);
+                            fetchAttendance(attendanceSearch, selectedFiliere, last30, todayIso);
+                          }}
+                          title="Consulter les séances et présences des 30 derniers jours (1 mois)"
+                        >
+                          🗓️ 30 derniers jours (1 mois)
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-secondary"
+                          onClick={() => {
+                            const { start, end } = getPreviousMonthRangeIso();
+                            setAttendanceDateStart(start);
+                            setAttendanceDateEnd(end);
+                            fetchAttendance(attendanceSearch, selectedFiliere, start, end);
+                          }}
+                          title="Consulter le mois précédent complet"
+                        >
+                          ⏮️ Mois précédent
+                        </button>
                         <button
                           type="button"
                           className="btn btn-sm btn-outline-secondary"
@@ -1581,10 +1639,34 @@ const DashboardHome = () => {
                               setAttendanceDateEnd('');
                               fetchAttendance(attendanceSearch, selectedFiliere, '', '');
                             }}
-                            title="Réinitialiser les dates"
+                            title="Réinitialiser les dates et tout afficher"
                           >
-                            ✕ Effacer dates
+                            ✕ Tout afficher
                           </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Badge récapitulatif de la plage affichée */}
+                    <div className="d-flex align-items-center justify-content-between pt-1 pb-1">
+                      <div className="small">
+                        {attendanceLoading ? (
+                          <span className="text-primary fw-semibold">
+                            <span className="spinner-border spinner-border-sm me-1" role="status"></span>
+                            Recherche des présences en cours...
+                          </span>
+                        ) : attendanceData?.period?.start ? (
+                          <span>
+                            <span className="fw-bold text-dark">Période affichée :</span>{' '}
+                            <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1">
+                              📅 Du {attendanceData.period.start} au {attendanceData.period.end}
+                            </span>
+                            <span className="ms-2 text-muted">
+                              ({attendanceData.total_professors || 0} enseignant{(attendanceData.total_professors || 0) > 1 ? 's' : ''} trouvé{(attendanceData.total_professors || 0) > 1 ? 's' : ''})
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted">Sélectionnez une date ou une période pour filtrer l'historique des séances</span>
                         )}
                       </div>
                     </div>
@@ -1625,7 +1707,7 @@ const DashboardHome = () => {
                         </div>
                       </div>
 
-                      {activePeriod.active && activePeriod.professors.length > 0 && (
+                      {activePeriod.professors && activePeriod.professors.length > 0 && (
                         <div className="col-12 col-md-3">
                           <label className="form-label small fw-semibold text-muted mb-1">Sélection rapide :</label>
                           <select
@@ -1644,7 +1726,7 @@ const DashboardHome = () => {
                         </div>
                       )}
 
-                      {activePeriod.active && (activePeriod.filieres?.length > 0 || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) && (
+                      {((activePeriod.filieres && activePeriod.filieres.length > 0) || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) && (
                         <div className="col-12 col-md-3">
                           <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière / cycle :</label>
                           <select
