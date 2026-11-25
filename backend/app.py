@@ -1368,20 +1368,36 @@ def get_attendance():
     db = get_db()
     prof_query = clean(request.args.get('prof', '')).lower()
     filiere_query = clean(request.args.get('filiere', '')).upper()
-    req_start = request.args.get('date_start')
-    req_end = request.args.get('date_end')
+    req_start = request.args.get('date_debut') or request.args.get('date_start')
+    req_end = request.args.get('date_fin') or request.args.get('date_end')
 
     active_imp = get_active_planning_import(db)
-    if req_start and req_end:
-        p_start_d = parse_date(normalize_date(req_start))
-        p_end_d = parse_date(normalize_date(req_end))
-    elif active_imp['active']:
-        p_start_d = parse_date(active_imp['period_start'])
-        p_end_d = parse_date(active_imp['period_end'])
-    else:
-        today = datetime.date.today()
-        p_start_d = today - datetime.timedelta(days=today.weekday())
-        p_end_d = p_start_d + datetime.timedelta(days=6)
+    p_start_d = parse_date(normalize_date(req_start)) if req_start else None
+    p_end_d = parse_date(normalize_date(req_end)) if req_end else None
+
+    if p_start_d and p_end_d and p_start_d > p_end_d:
+        p_start_d, p_end_d = p_end_d, p_start_d
+
+    if not p_start_d and not p_end_d:
+        if active_imp['active']:
+            p_start_d = parse_date(active_imp['period_start'])
+            p_end_d = parse_date(active_imp['period_end'])
+        else:
+            today = datetime.date.today()
+            p_start_d = today - datetime.timedelta(days=today.weekday())
+            p_end_d = p_start_d + datetime.timedelta(days=6)
+    elif p_start_d and not p_end_d:
+        if active_imp['active'] and active_imp.get('period_end'):
+            imp_end = parse_date(active_imp['period_end'])
+            p_end_d = imp_end if (imp_end and imp_end >= p_start_d) else p_start_d + datetime.timedelta(days=6)
+        else:
+            p_end_d = p_start_d + datetime.timedelta(days=6)
+    elif p_end_d and not p_start_d:
+        if active_imp['active'] and active_imp.get('period_start'):
+            imp_start = parse_date(active_imp['period_start'])
+            p_start_d = imp_start if (imp_start and imp_start <= p_end_d) else p_end_d - datetime.timedelta(days=6)
+        else:
+            p_start_d = p_end_d - datetime.timedelta(days=6)
 
     cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
     cours_in_period = []
@@ -1557,20 +1573,36 @@ def export_journal():
     from openpyxl.utils import get_column_letter
 
     db = get_db()
-    req_start = request.args.get('date_start')
-    req_end = request.args.get('date_end')
+    req_start = request.args.get('date_debut') or request.args.get('date_start')
+    req_end = request.args.get('date_fin') or request.args.get('date_end')
 
     active_imp = get_active_planning_import(db)
-    if req_start and req_end:
-        p_start_d = parse_date(normalize_date(req_start))
-        p_end_d = parse_date(normalize_date(req_end))
-    elif active_imp['active']:
-        p_start_d = parse_date(active_imp['period_start'])
-        p_end_d = parse_date(active_imp['period_end'])
-    else:
-        today = datetime.date.today()
-        p_start_d = today - datetime.timedelta(days=today.weekday())
-        p_end_d = p_start_d + datetime.timedelta(days=6)
+    p_start_d = parse_date(normalize_date(req_start)) if req_start else None
+    p_end_d = parse_date(normalize_date(req_end)) if req_end else None
+
+    if p_start_d and p_end_d and p_start_d > p_end_d:
+        p_start_d, p_end_d = p_end_d, p_start_d
+
+    if not p_start_d and not p_end_d:
+        if active_imp['active']:
+            p_start_d = parse_date(active_imp['period_start'])
+            p_end_d = parse_date(active_imp['period_end'])
+        else:
+            today = datetime.date.today()
+            p_start_d = today - datetime.timedelta(days=today.weekday())
+            p_end_d = p_start_d + datetime.timedelta(days=6)
+    elif p_start_d and not p_end_d:
+        if active_imp['active'] and active_imp.get('period_end'):
+            imp_end = parse_date(active_imp['period_end'])
+            p_end_d = imp_end if (imp_end and imp_end >= p_start_d) else p_start_d + datetime.timedelta(days=6)
+        else:
+            p_end_d = p_start_d + datetime.timedelta(days=6)
+    elif p_end_d and not p_start_d:
+        if active_imp['active'] and active_imp.get('period_start'):
+            imp_start = parse_date(active_imp['period_start'])
+            p_start_d = imp_start if (imp_start and imp_start <= p_end_d) else p_end_d - datetime.timedelta(days=6)
+        else:
+            p_start_d = p_end_d - datetime.timedelta(days=6)
 
     cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
     cours_in_period = []

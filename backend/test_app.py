@@ -566,7 +566,7 @@ def test_feature2_weekly_professor_attendance_tracking_and_search(client):
         db.add_all([abs_rec, ret_rec])
         db.commit()
 
-        # Recherche de l'enseignant via l'API
+        # Recherche de l'enseignant via l'API (avec date_start / date_end)
         res = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_start=16/11/2026&date_end=21/11/2026')
         assert res.status_code == 200
         data = res.get_json()
@@ -577,6 +577,21 @@ def test_feature2_weekly_professor_attendance_tracking_and_search(client):
         assert prof_info['presents'] == 1
         assert prof_info['absents'] == 1
         assert prof_info['retards'] == 1
+
+        # Test filtres de sélection date début & date fin (format ISO natif <input type="date">)
+        res_iso = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-16&date_fin=2026-11-21')
+        assert res_iso.status_code == 200
+        data_iso = res_iso.get_json()
+        assert data_iso['total_professors'] == 1
+        assert data_iso['professors'][0]['total_sessions'] == 3
+
+        # Test filtre sur un jour unique (Mardi uniquement -> 1 séance absente)
+        res_single_day = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-17&date_fin=2026-11-17')
+        assert res_single_day.status_code == 200
+        data_single = res_single_day.get_json()
+        assert data_single['total_professors'] == 1
+        assert data_single['professors'][0]['total_sessions'] == 1
+        assert data_single['professors'][0]['absents'] == 1
 
         # Vérification du résumé jour par jour
         summary = prof_info['summary_text']

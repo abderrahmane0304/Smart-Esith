@@ -30,6 +30,14 @@ const DashboardHome = () => {
     return `${y}-${m}-${day}`;
   };
 
+  const toInputDate = (dStr) => {
+    if (!dStr) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) return dStr;
+    const parts = dStr.split('/');
+    if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    return dStr;
+  };
+
   const detectGroupCycle = (grp) => {
     if (!grp) return 'Autre';
     const s = String(grp).toUpperCase();
@@ -47,6 +55,8 @@ const DashboardHome = () => {
   const [attendanceSearch, setAttendanceSearch] = useState('');
   const [attendanceData, setAttendanceData] = useState(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceDateStart, setAttendanceDateStart] = useState('');
+  const [attendanceDateEnd, setAttendanceDateEnd] = useState('');
   const [exportingJournal, setExportingJournal] = useState(false);
 
   // Sauvegardes & Archives (Rétention : 3 mois)
@@ -90,12 +100,14 @@ const DashboardHome = () => {
     }
   };
 
-  const fetchAttendance = async (prof = '', filiere = '') => {
+  const fetchAttendance = async (prof = attendanceSearch, filiere = selectedFiliere, dStart = attendanceDateStart, dEnd = attendanceDateEnd) => {
     try {
       setAttendanceLoading(true);
       const params = new URLSearchParams();
       if (prof) params.append('prof', prof);
       if (filiere) params.append('filiere', filiere);
+      if (dStart) params.append('date_debut', dStart);
+      if (dEnd) params.append('date_fin', dEnd);
       const res = await apiClient.get(`/dashboard/attendance?${params.toString()}`);
       setAttendanceData(res.data);
     } catch (err) {
@@ -108,7 +120,11 @@ const DashboardHome = () => {
   const handleExportJournal = async () => {
     try {
       setExportingJournal(true);
-      const res = await apiClient.get('/export-journal', { responseType: 'blob' });
+      const params = new URLSearchParams();
+      if (attendanceDateStart) params.append('date_debut', attendanceDateStart);
+      if (attendanceDateEnd) params.append('date_fin', attendanceDateEnd);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await apiClient.get(`/export-journal${qs}`, { responseType: 'blob' });
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
@@ -1468,7 +1484,9 @@ const DashboardHome = () => {
                       </h4>
                       <p className="text-muted small mb-0">
                         Comparaison automatique du planning prévu (Excel importé) vs Absences, Retards et Annulations déclarés.
-                        {activePeriod.period_start && activePeriod.period_end ? ` Période active : ${activePeriod.period_start} au ${activePeriod.period_end}` : ''}
+                        {attendanceData?.period?.start && attendanceData?.period?.end
+                          ? ` • Période analysée : du ${attendanceData.period.start} au ${attendanceData.period.end}`
+                          : (activePeriod.period_start && activePeriod.period_end ? ` • Période active : du ${activePeriod.period_start} au ${activePeriod.period_end}` : '')}
                       </p>
                     </div>
                     <div className="d-flex gap-2 flex-wrap">
@@ -1485,7 +1503,7 @@ const DashboardHome = () => {
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1"
-                        onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
+                        onClick={() => fetchAttendance(attendanceSearch, selectedFiliere, attendanceDateStart, attendanceDateEnd)}
                         title="Actualiser les données de présence"
                       >
                         <span>🔄</span>
@@ -1494,107 +1512,187 @@ const DashboardHome = () => {
                     </div>
                   </div>
 
-                  {/* Barre de recherche et filtres */}
-                  <div className="row g-2 mb-4 align-items-center bg-light p-3 rounded border">
-                    <div className="col-12 col-md-5">
-                      <label className="form-label small fw-semibold text-muted mb-1">Recherche par professeur :</label>
-                      <div className="input-group">
-                        <span className="input-group-text bg-white border-end-0">🔍</span>
+                  {/* Section des Filtres de Dates et Recherche */}
+                  <div className="p-3 mb-4 rounded border bg-light shadow-sm">
+                    {/* Ligne 1 : Filtre par Période (Date Début & Date Fin) */}
+                    <div className="row g-2 align-items-end mb-3">
+                      <div className="col-12 col-sm-6 col-md-3">
+                        <label className="form-label small fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                          📅 Date début :
+                        </label>
                         <input
-                          type="text"
-                          className="dash-input form-control border-start-0"
-                          placeholder="Nom du professeur (ex: OUBAD, AZHAR...)"
-                          value={attendanceSearch}
-                          onChange={e => setAttendanceSearch(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              fetchAttendance(attendanceSearch, selectedFiliere);
-                            }
+                          type="date"
+                          className="dash-input form-control form-control-sm"
+                          value={attendanceDateStart}
+                          onChange={e => {
+                            setAttendanceDateStart(e.target.value);
                           }}
                         />
-                        {attendanceSearch && (
+                      </div>
+                      <div className="col-12 col-sm-6 col-md-3">
+                        <label className="form-label small fw-bold mb-1" style={{ color: '#0B4F6C' }}>
+                          📅 Date fin :
+                        </label>
+                        <input
+                          type="date"
+                          className="dash-input form-control form-control-sm"
+                          value={attendanceDateEnd}
+                          onChange={e => {
+                            setAttendanceDateEnd(e.target.value);
+                          }}
+                        />
+                      </div>
+                      <div className="col-12 col-md-6 d-flex gap-2 flex-wrap">
+                        {activePeriod.active && activePeriod.period_start && activePeriod.period_end && (
                           <button
-                            className="btn btn-outline-secondary"
                             type="button"
+                            className="btn btn-sm btn-outline-primary"
                             onClick={() => {
-                              setAttendanceSearch('');
-                              fetchAttendance('', selectedFiliere);
+                              const s = toInputDate(activePeriod.period_start);
+                              const en = toInputDate(activePeriod.period_end);
+                              setAttendanceDateStart(s);
+                              setAttendanceDateEnd(en);
+                              fetchAttendance(attendanceSearch, selectedFiliere, s, en);
                             }}
+                            title={`Appliquer la période du planning : ${activePeriod.period_start} au ${activePeriod.period_end}`}
                           >
-                            ✕
+                            📅 Période active ({activePeriod.period_start} - {activePeriod.period_end})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-secondary"
+                          onClick={() => {
+                            const todayIso = getTodayIso();
+                            setAttendanceDateStart(todayIso);
+                            setAttendanceDateEnd(todayIso);
+                            fetchAttendance(attendanceSearch, selectedFiliere, todayIso, todayIso);
+                          }}
+                          title="Filtrer uniquement sur la journée d'aujourd'hui"
+                        >
+                          Aujourd'hui
+                        </button>
+                        {(attendanceDateStart || attendanceDateEnd) && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => {
+                              setAttendanceDateStart('');
+                              setAttendanceDateEnd('');
+                              fetchAttendance(attendanceSearch, selectedFiliere, '', '');
+                            }}
+                            title="Réinitialiser les dates"
+                          >
+                            ✕ Effacer dates
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {activePeriod.active && activePeriod.professors.length > 0 && (
-                      <div className="col-12 col-md-3">
-                        <label className="form-label small fw-semibold text-muted mb-1">Sélection rapide :</label>
-                        <select
-                          className="form-select form-select-sm"
-                          value={attendanceSearch}
-                          onChange={e => {
-                            setAttendanceSearch(e.target.value);
-                            fetchAttendance(e.target.value, selectedFiliere);
-                          }}
-                        >
-                          <option value="">Tous les professeurs...</option>
-                          {activePeriod.professors.map(p => (
-                            <option key={p} value={p}>{p}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
+                    <hr className="my-2 border-secondary-subtle" />
 
-                    {activePeriod.active && (activePeriod.filieres?.length > 0 || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) && (
-                      <div className="col-12 col-md-3">
-                        <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière / cycle :</label>
-                        <select
-                          className="form-select form-select-sm"
-                          value={selectedFiliere}
-                          onChange={e => {
-                            setSelectedFiliere(e.target.value);
-                            fetchAttendance(attendanceSearch, e.target.value);
-                          }}
-                        >
-                          <option value="">Toutes les filières ({activePeriod.filieres?.length || 0})</option>
-                          {activePeriod.filieres_by_cycle?.Licence?.length > 0 && (
-                            <optgroup label="🎓 Cycle Licence">
-                              <option value="CYCLE:Licence">Tous les cours Licence ({activePeriod.filieres_by_cycle.Licence.length} filières)</option>
-                              {activePeriod.filieres_by_cycle.Licence.map(f => (
-                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
-                              ))}
-                            </optgroup>
+                    {/* Ligne 2 : Recherche Enseignants & Filtre Filière */}
+                    <div className="row g-2 align-items-end mt-1">
+                      <div className="col-12 col-md-4">
+                        <label className="form-label small fw-semibold text-muted mb-1">Recherche par professeur :</label>
+                        <div className="input-group input-group-sm">
+                          <span className="input-group-text bg-white border-end-0">🔍</span>
+                          <input
+                            type="text"
+                            className="dash-input form-control border-start-0"
+                            placeholder="Nom du professeur (ex: OUBAD, AZHAR...)"
+                            value={attendanceSearch}
+                            onChange={e => setAttendanceSearch(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                fetchAttendance(attendanceSearch, selectedFiliere, attendanceDateStart, attendanceDateEnd);
+                              }
+                            }}
+                          />
+                          {attendanceSearch && (
+                            <button
+                              className="btn btn-outline-secondary"
+                              type="button"
+                              onClick={() => {
+                                setAttendanceSearch('');
+                                fetchAttendance('', selectedFiliere, attendanceDateStart, attendanceDateEnd);
+                              }}
+                            >
+                              ✕
+                            </button>
                           )}
-                          {activePeriod.filieres_by_cycle?.Ingénieur?.length > 0 && (
-                            <optgroup label="⚙️ Cycle Ingénieur d'État">
-                              <option value="CYCLE:Ingénieur">Tous les cours Ingénieur ({activePeriod.filieres_by_cycle.Ingénieur.length} filières)</option>
-                              {activePeriod.filieres_by_cycle.Ingénieur.map(f => (
-                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {activePeriod.filieres_by_cycle?.Master?.length > 0 && (
-                            <optgroup label="🔬 Cycle Master">
-                              <option value="CYCLE:Master">Tous les cours Master ({activePeriod.filieres_by_cycle.Master.length} filières)</option>
-                              {activePeriod.filieres_by_cycle.Master.map(f => (
-                                <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                        </select>
+                        </div>
                       </div>
-                    )}
 
-                    <div className="col-12 col-md-2 d-flex align-items-end">
-                      <button
-                        type="button"
-                        className="btn-pistachio w-100 py-2 mt-auto"
-                        onClick={() => fetchAttendance(attendanceSearch, selectedFiliere)}
-                      >
-                        Rechercher
-                      </button>
+                      {activePeriod.active && activePeriod.professors.length > 0 && (
+                        <div className="col-12 col-md-3">
+                          <label className="form-label small fw-semibold text-muted mb-1">Sélection rapide :</label>
+                          <select
+                            className="form-select form-select-sm"
+                            value={attendanceSearch}
+                            onChange={e => {
+                              setAttendanceSearch(e.target.value);
+                              fetchAttendance(e.target.value, selectedFiliere, attendanceDateStart, attendanceDateEnd);
+                            }}
+                          >
+                            <option value="">Tous les professeurs ({activePeriod.professors.length})...</option>
+                            {activePeriod.professors.map(p => (
+                              <option key={p} value={p}>{p}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {activePeriod.active && (activePeriod.filieres?.length > 0 || Object.keys(activePeriod.filieres_by_cycle || {}).length > 0) && (
+                        <div className="col-12 col-md-3">
+                          <label className="form-label small fw-semibold text-muted mb-1">Filtrer par filière / cycle :</label>
+                          <select
+                            className="form-select form-select-sm"
+                            value={selectedFiliere}
+                            onChange={e => {
+                              setSelectedFiliere(e.target.value);
+                              fetchAttendance(attendanceSearch, e.target.value, attendanceDateStart, attendanceDateEnd);
+                            }}
+                          >
+                            <option value="">Toutes les filières ({activePeriod.filieres?.length || 0})</option>
+                            {activePeriod.filieres_by_cycle?.Licence?.length > 0 && (
+                              <optgroup label="🎓 Cycle Licence">
+                                <option value="CYCLE:Licence">Tous les cours Licence ({activePeriod.filieres_by_cycle.Licence.length} filières)</option>
+                                {activePeriod.filieres_by_cycle.Licence.map(f => (
+                                  <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {activePeriod.filieres_by_cycle?.Ingénieur?.length > 0 && (
+                              <optgroup label="⚙️ Cycle Ingénieur d'État">
+                                <option value="CYCLE:Ingénieur">Tous les cours Ingénieur ({activePeriod.filieres_by_cycle.Ingénieur.length} filières)</option>
+                                {activePeriod.filieres_by_cycle.Ingénieur.map(f => (
+                                  <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {activePeriod.filieres_by_cycle?.Master?.length > 0 && (
+                              <optgroup label="🔬 Cycle Master">
+                                <option value="CYCLE:Master">Tous les cours Master ({activePeriod.filieres_by_cycle.Master.length} filières)</option>
+                                {activePeriod.filieres_by_cycle.Master.map(f => (
+                                  <option key={f} value={f}>&nbsp;&nbsp;↳ {f}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="col-12 col-md-2 d-flex align-items-end">
+                        <button
+                          type="button"
+                          className="btn-pistachio w-100 py-1"
+                          onClick={() => fetchAttendance(attendanceSearch, selectedFiliere, attendanceDateStart, attendanceDateEnd)}
+                        >
+                          Rechercher
+                        </button>
+                      </div>
                     </div>
                   </div>
 
