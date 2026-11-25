@@ -21,10 +21,12 @@ html {
   max-width: 100vw;
   max-height: 100vh;
   overflow: hidden;
+  cursor: none !important;
 }
 
 *, *::before, *::after {
   box-sizing: inherit;
+  cursor: none !important;
 }
 
 body {
@@ -39,6 +41,9 @@ body {
   background-color: var(--bg-color);
   color: var(--esith-blue-dark);
   position: relative;
+  cursor: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 /* ========================================================= */

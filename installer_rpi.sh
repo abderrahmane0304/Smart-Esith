@@ -46,6 +46,9 @@ fi
 if ! dpkg -s python3-pil >/dev/null 2>&1; then
     MISSING_PKGS="$MISSING_PKGS python3-pil"
 fi
+if ! command -v unclutter >/dev/null 2>&1; then
+    MISSING_PKGS="$MISSING_PKGS unclutter"
+fi
 
 if [ -n "$MISSING_PKGS" ]; then
     echo "   ⚠️ Paquets manquants détectés :$MISSING_PKGS"
@@ -155,15 +158,15 @@ EOF
     echo "   ✅ Boutons installés dans : $DDIR"
 done
 
-# Optionnel : Démarrage automatique au boot du Raspberry Pi
-AUTOSTART_DIR="$HOME/.config/autostart"
-if [ "$1" = "--autostart" ] || [ "$1" = "-a" ]; then
-    mkdir -p "$AUTOSTART_DIR"
-    cp "$FILE_KIOSK" "$AUTOSTART_DIR/smart_esith_autostart.desktop"
-    echo "   🚀 Démarrage automatique activé au boot dans $AUTOSTART_DIR"
-elif [ "$1" = "--no-autostart" ]; then
-    rm -f "$AUTOSTART_DIR/smart_esith_autostart.desktop"
-    echo "   ℹ️ Démarrage automatique désactivé."
+# 5. Démarrage automatique au boot du Raspberry Pi (activé par défaut)
+if [ "$1" != "--no-autostart" ]; then
+    if [ -f "$SCRIPT_DIR/activer_demarrage_automatique.sh" ]; then
+        bash "$SCRIPT_DIR/activer_demarrage_automatique.sh"
+    fi
+else
+    if [ -f "$SCRIPT_DIR/desactiver_demarrage_automatique.sh" ]; then
+        bash "$SCRIPT_DIR/desactiver_demarrage_automatique.sh"
+    fi
 fi
 
 echo ""
@@ -173,11 +176,10 @@ echo "=========================================================="
 echo "Vous avez maintenant sur votre bureau Raspberry Pi :"
 echo ""
 echo "  1. 📌 'Smart ESITH'            -> Lance le serveur + fenêtre navigateur"
-echo "  2. 📺 'Smart ESITH (Kiosk TV)'  -> Lance en plein écran TV (idéal Hall)"
+echo "  2. 📺 'Smart ESITH (Kiosk TV)'  -> Lance en plein écran TV (sans pointeur de souris)"
 echo "  3. 🛑 'Arrêter Smart ESITH'    -> Coupe le serveur en un clic"
 echo ""
-echo "💡 Astuce Démarrage Automatique au Boot de la Raspberry Pi :"
-echo "   Pour que l'affichage démarre tout seul quand la TV s'allume :"
-echo "   ./installer_rpi.sh --autostart"
+echo "🚀 Le démarrage automatique au boot est ACTIVÉ :"
+echo "   La télévision du Hall s'allumera automatiquement sur Smart ESITH !"
 echo "=========================================================="
 

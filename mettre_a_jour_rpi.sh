@@ -87,14 +87,20 @@ chmod -R 777 "$SCRIPT_DIR/backend/static/uploads" "$SCRIPT_DIR/backend/backups" 
 # Nettoyage du cache Chromium du profil Kiosk
 rm -rf /tmp/smart_esith_kiosk_*/Default/Cache /tmp/smart_esith_kiosk_*/Default/"Code Cache" 2>/dev/null || true
 
-# 5. Mise à jour des dépendances Python & PDF
-echo "📦 [5/5] Vérification des dépendances Python & convertisseurs PDF..."
+# 5. Mise à jour des dépendances Python, PDF & Kiosk
+echo "📦 [5/5] Vérification des dépendances Python, convertisseurs PDF & Kiosk..."
 if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get install -y --no-install-recommends python3-fitz poppler-utils 2>/dev/null || true
+    sudo apt-get install -y --no-install-recommends python3-fitz poppler-utils unclutter 2>/dev/null || true
 fi
 if [ -f "$SCRIPT_DIR/backend/venv/bin/pip" ]; then
     "$SCRIPT_DIR/backend/venv/bin/pip" install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet || "$SCRIPT_DIR/backend/venv/bin/pip" install Pillow openpyxl pymupdf pypdfium2 --quiet || true
     echo "   ✅ Dépendances Python et PDF à jour (Pillow, PyMuPDF, etc.)."
+fi
+
+# 6. Configuration automatique du démarrage au boot (Kiosk TV)
+if [ -f "$SCRIPT_DIR/activer_demarrage_automatique.sh" ]; then
+    bash "$SCRIPT_DIR/activer_demarrage_automatique.sh" >/dev/null 2>&1 || true
+    echo "   🚀 Démarrage automatique Kiosk au boot configuré avec succès."
 fi
 
 echo ""

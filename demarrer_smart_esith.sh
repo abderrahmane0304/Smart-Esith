@@ -71,11 +71,30 @@ launch_browser() {
 
     if [ "$IS_KIOSK" -eq 1 ]; then
         echo "📺 Démarrage en mode Kiosk plein écran ($BROWSER_BIN)..."
+
+        # 1. Empêcher la mise en veille et l'écran noir sur le téléviseur
+        if command -v xset >/dev/null 2>&1; then
+            xset s off 2>/dev/null || true
+            xset -dpms 2>/dev/null || true
+            xset s noblank 2>/dev/null || true
+        fi
+
+        # 2. Masquer le pointeur de souris au niveau du système si unclutter est installé
+        if command -v unclutter >/dev/null 2>&1; then
+            pkill -f unclutter 2>/dev/null || true
+            unclutter -idle 0.1 -root >/dev/null 2>&1 &
+        fi
+
         if [ "$BROWSER_TYPE" = "chromium" ]; then
             local KIOSK_PROFILE="/tmp/smart_esith_kiosk_${USER:-pi}"
             mkdir -p "$KIOSK_PROFILE" 2>/dev/null || true
             # Vider le cache disque pour forcer la prise en compte immédiate des dernières modifications
             rm -rf "$KIOSK_PROFILE/Default/Cache" "$KIOSK_PROFILE/Default/Code Cache" 2>/dev/null || true
+            # Nettoyer l'état de crash éventuel après une coupure d'électricité imprévue
+            if [ -f "$KIOSK_PROFILE/Default/Preferences" ]; then
+                sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "$KIOSK_PROFILE/Default/Preferences" 2>/dev/null || true
+                sed -i 's/"exited_cleanly":false/"exited_cleanly":true/' "$KIOSK_PROFILE/Default/Preferences" 2>/dev/null || true
+            fi
             $RUN_PREFIX nohup "$BROWSER_BIN" \
                 --kiosk \
                 --noerrdialogs \
@@ -86,6 +105,10 @@ launch_browser() {
                 --disable-cache \
                 --disk-cache-size=1 \
                 --media-cache-size=1 \
+                --disable-pinch \
+                --overscroll-history-navigation=0 \
+                --hide-scrollbars \
+                --disable-features=Translate \
                 --user-data-dir="$KIOSK_PROFILE" \
                 "$URL" >/dev/null 2>&1 </dev/null &
         elif [ "$BROWSER_TYPE" = "firefox" ]; then
