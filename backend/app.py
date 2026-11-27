@@ -579,38 +579,146 @@ def save_file_backup(file_or_bytes, original_filename, category, db=None):
 
 
 def create_database_backup(db=None):
-    """Crée un instantané de sauvegarde de la base de données SQLite hall_esith_v3.db.
-    Rétention de 3 mois (90 jours).
+    """Crée une sauvegarde complète de la base de données sous forme de fichier Excel multi-feuilles (.xlsx)
+    pour faciliter la consultation et l'extraction de données par l'administration (DEE, Scolarité).
+    Rétention automatique de 3 mois (90 jours).
     """
-    import shutil
-    if not os.path.exists(DB_PATH):
-        return None
-
-    now = datetime.datetime.now()
-    ts = now.strftime('%Y%m%d_%H%M%S')
-    stored_filename = f"database_{ts}_hall_esith_v3.db"
-    target_path = os.path.join(BACKUP_DIR, stored_filename)
-
-    try:
-        shutil.copy2(DB_PATH, target_path)
-        file_size = os.path.getsize(target_path)
-    except Exception as e:
-        print("[Smart ESITH] Erreur copie sauvegarde BDD :", e)
-        return None
-
-    created_str = now.strftime('%Y-%m-%d %H:%M:%S')
-    expire_str = (now + datetime.timedelta(days=BACKUP_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 
     own_session = db is None
     if own_session:
         db = SessionLocal()
 
+    now = datetime.datetime.now()
+    ts = now.strftime('%Y%m%d_%H%M%S')
+    stored_filename = f"sauvegarde_esith_{ts}.xlsx"
+    target_path = os.path.join(BACKUP_DIR, stored_filename)
+
+    try:
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)  # Supprime la feuille vide par défaut
+
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="0B4F6C", end_color="0B4F6C", fill_type="solid")
+        center_align = Alignment(horizontal="center", vertical="center")
+        left_align = Alignment(horizontal="left", vertical="center")
+        thin_border = Border(
+            left=Side(style='thin', color='DDDDDD'),
+            right=Side(style='thin', color='DDDDDD'),
+            top=Side(style='thin', color='DDDDDD'),
+            bottom=Side(style='thin', color='DDDDDD')
+        )
+
+        def add_sheet_data(title, headers, rows):
+            ws = wb.create_sheet(title=title)
+            ws.views.sheetView[0].showGridLines = True
+            ws.freeze_panes = 'A2'
+
+            ws.append(headers)
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+
+            for r in rows:
+                ws.append(r)
+                row_idx = ws.max_row
+                for col_idx in range(1, len(headers) + 1):
+                    c = ws.cell(row=row_idx, column=col_idx)
+                    c.border = thin_border
+                    c.alignment = left_align
+
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    val_str = str(cell.value or '')
+                    if len(val_str) > max_len:
+                        max_len = len(val_str)
+                ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
+
+        # 1. Cours FI
+        cours_headers = ["ID", "Num Jour", "Date", "Heure Début", "Heure Fin", "Cycle", "Professeur", "Groupe", "Module", "Salle", "Appel Fait"]
+        cours_rows = [
+            [c.id, clean(getattr(c, 'numDay', '')), clean(getattr(c, 'date', '')), clean(getattr(c, 'hd', '')), clean(getattr(c, 'hf', '')), clean(getattr(c, 'Cycle', '')), clean(getattr(c, 'prof', '')), clean(getattr(c, 'groupe', '')), clean(getattr(c, 'module', '')), clean(getattr(c, 'salle', '')), clean(getattr(c, 'AppelFait', ''))]
+            for c in db.query(Cours).order_by(Cours.id).all()
+        ]
+        add_sheet_data("Cours_FI", cours_headers, cours_rows)
+
+        # 2. Absences
+        abs_headers = ["ID", "Date Début", "Date Fin", "Heure", "Professeur", "Groupe", "Motif", "Actif"]
+        abs_rows = [
+            [a.id, clean(getattr(a, 'date', '')), clean(getattr(a, 'date_fin', None) or getattr(a, 'date', '')), clean(getattr(a, 'heure', '')), clean(getattr(a, 'prof', '')), clean(getattr(a, 'groupe', '')), clean(getattr(a, 'motif', '')), "Oui" if getattr(a, 'actif', True) else "Non"]
+            for a in db.query(Absence).order_by(Absence.id).all()
+        ]
+        add_sheet_data("Absences", abs_headers, abs_rows)
+
+        # 3. Retards
+        ret_headers = ["ID", "Date", "Heure Prévue", "Heure Réelle", "Durée Retard", "Professeur", "Groupe", "Actif"]
+        ret_rows = [
+            [r.id, clean(getattr(r, 'date', '')), clean(getattr(r, 'heure_prevue', '')), clean(getattr(r, 'heure_reelle', '')), clean(getattr(r, 'duree_retard', '')), clean(getattr(r, 'prof', '')), clean(getattr(r, 'groupe', '')), "Oui" if getattr(r, 'actif', True) else "Non"]
+            for r in db.query(Retard).order_by(Retard.id).all()
+        ]
+        add_sheet_data("Retards", ret_headers, ret_rows)
+
+        # 4. Changements de Salle
+        sal_headers = ["ID", "Date", "Heure Création", "Groupe", "Ancienne Salle", "Nouvelle Salle", "Actif"]
+        sal_rows = [
+            [s.id, clean(getattr(s, 'date', '')), clean(getattr(s, 'heure_creation', '')), clean(getattr(s, 'groupe', '')), clean(getattr(s, 'ancienne_salle', '')), clean(getattr(s, 'nouvelle_salle', '')), "Oui" if getattr(s, 'actif', True) else "Non"]
+            for s in db.query(ChangementSalle).order_by(ChangementSalle.id).all()
+        ]
+        add_sheet_data("Changements_Salle", sal_headers, sal_rows)
+
+        # 5. Formations Continues
+        fc_headers = ["ID", "Titre", "Date", "Heure Début", "Heure Fin", "Salle", "Entreprise", "Formateur", "Actif"]
+        fc_rows = [
+            [f.id, clean(getattr(f, 'titre', '')), clean(getattr(f, 'date', '')), clean(getattr(f, 'heure_debut', '')), clean(getattr(f, 'heure_fin', '')), clean(getattr(f, 'salle', '')), clean(getattr(f, 'entreprise', '')), clean(getattr(f, 'formateur', '')), "Oui" if getattr(f, 'actif', True) else "Non"]
+            for f in db.query(Formation).order_by(Formation.id).all()
+        ]
+        add_sheet_data("Formation_Continue", fc_headers, fc_rows)
+
+        # 6. Événements
+        ev_headers = ["ID", "Titre", "Date Début", "Date Fin", "Heure Début", "Lieu", "Média", "Mode Affichage", "Actif"]
+        ev_rows = [
+            [e.id, clean(getattr(e, 'titre', '')), clean(getattr(e, 'date', '')), clean(getattr(e, 'date_fin', None) or getattr(e, 'date', '')), clean(getattr(e, 'heure_debut', '')), clean(getattr(e, 'lieu', '')), clean(getattr(e, 'media_path', '')), clean(getattr(e, 'mode_affichage', '')), "Oui" if getattr(e, 'actif', True) else "Non"]
+            for e in db.query(Event).order_by(Event.id).all()
+        ]
+        add_sheet_data("Evenements", ev_headers, ev_rows)
+
+        # 7. Imports Planning
+        imp_headers = ["ID", "Fichier", "Date Import", "Période Début", "Période Fin", "Type Période", "Actif"]
+        imp_rows = [
+            [p.id, clean(getattr(p, 'filename', '')), clean(getattr(p, 'import_date', '')), clean(getattr(p, 'period_start', '')), clean(getattr(p, 'period_end', '')), clean(getattr(p, 'period_type', '')), "Oui" if getattr(p, 'active', True) else "Non"]
+            for p in db.query(PlanningImport).order_by(PlanningImport.id).all()
+        ]
+        add_sheet_data("Imports_Planning", imp_headers, imp_rows)
+
+        # 8. Journal des Actions
+        log_headers = ["ID", "Utilisateur", "Rôle", "Action", "Détails", "Horodatage"]
+        log_rows = [
+            [l.id, clean(getattr(l, 'user', '')), clean(getattr(l, 'role', '')), clean(getattr(l, 'action', '')), clean(getattr(l, 'details', '')), clean(getattr(l, 'timestamp', ''))]
+            for l in db.query(ActionLog).order_by(ActionLog.id.desc()).all()
+        ]
+        add_sheet_data("Journal_Actions", log_headers, log_rows)
+
+        wb.save(target_path)
+        file_size = os.path.getsize(target_path)
+    except Exception as e:
+        print("[Smart ESITH] Erreur génération sauvegarde Excel :", e)
+        return None
+
+    created_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    expire_str = (now + datetime.timedelta(days=BACKUP_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+
     backup_rec = None
     try:
         backup_rec = FileBackup(
             filename=stored_filename,
-            original_name="hall_esith_v3.db",
-            category="database",
+            original_name=f"Sauvegarde_Complete_ESITH_{ts}.xlsx",
+            category="excel_backup",
             file_path=stored_filename,
             file_size=file_size,
             created_at=created_str,
@@ -620,7 +728,7 @@ def create_database_backup(db=None):
         db.commit()
     except Exception as e:
         db.rollback()
-        print("[Smart ESITH] Erreur enregistrement backup BDD :", e)
+        print("[Smart ESITH] Erreur enregistrement backup Excel :", e)
     finally:
         if own_session:
             db.close()
@@ -725,12 +833,13 @@ def cleanup_expired_records(db=None):
                 db.delete(e)
                 deleted_events += 1
 
-        # Purge des alertes antérieures à aujourd'hui pour l'affichage quotidien du hall
+        # Conservation des alertes (absences, retards, changements) pendant 90 jours (3 mois)
+        # pour la consultation de l'historique et le suivi des présences
         for model in (Absence, Retard, ChangementSalle):
             for rec in db.query(model).all():
                 end_str = getattr(rec, 'date_fin', None) or rec.date
                 d = parse_date(end_str)
-                if d is not None and d < today:
+                if d is not None and d < history_cutoff:
                     db.delete(rec)
                     deleted_alerts += 1
 
@@ -743,7 +852,7 @@ def cleanup_expired_records(db=None):
 
         if deleted_events or deleted_alerts or deleted_cours:
             db.commit()
-            print(f"[Smart ESITH] Nettoyage auto : {deleted_events} événement(s) (>14j), {deleted_alerts} alerte(s) (<aujourd'hui), {deleted_cours} cours (>90j) supprimé(s).")
+            print(f"[Smart ESITH] Nettoyage auto : {deleted_events} événement(s) (>14j), {deleted_alerts} alerte(s) (>90j), {deleted_cours} cours (>90j) supprimé(s).")
     except Exception as e:
         db.rollback()
         print("[Smart ESITH] Nettoyage automatique ignoré :", e)
@@ -1398,14 +1507,35 @@ def import_planning(current_user):
 
 @app.route('/api/dashboard/active-period-data', methods=['GET'])
 def get_active_period_data():
-    """Retourne les professeurs et filières de la période active (semaine / mois en cours).
-    Règle Empty State : Si aucun planning n'a été importé pour la période en cours,
-    retourne active=False avec des listes vides.
+    """Retourne les professeurs et filières de tous les cours enregistrés
+    ainsi que les métadonnées de la période de planning active.
     """
     db = get_db()
     req_date = request.args.get('date')
     ref_d = parse_date(normalize_date(req_date)) if req_date else None
     data = get_active_planning_import(db, ref_d)
+
+    # Si aucune date spécifique n'est demandée, enrichit avec tous les professeurs et filières enregistrés dans la base
+    if not req_date and data.get('active'):
+        all_profs = set(data.get('professors') or [])
+        all_fils = set(data.get('filieres') or [])
+        try:
+            raw_p = db.query(Cours.prof).filter(Cours.Cycle.in_(FI_CYCLES), Cours.prof != '').distinct().all()
+            for p in raw_p:
+                if p and p[0]:
+                    all_profs.add(p[0])
+            raw_g = db.query(Cours.groupe).filter(Cours.Cycle.in_(FI_CYCLES), Cours.groupe != '').distinct().all()
+            for g in raw_g:
+                if g and g[0]:
+                    all_fils.update(extract_filieres_from_group(g[0]))
+        except Exception:
+            pass
+        data['professors'] = sorted(list(all_profs))
+        data['filieres'] = sorted(list(all_fils))
+        data['filieres_by_cycle'] = classify_filieres_by_cycle(data['filieres'], db)
+        data['count_professors'] = len(data['professors'])
+        data['count_filieres'] = len(data['filieres'])
+
     return jsonify(data)
 
 
@@ -1422,39 +1552,29 @@ def get_attendance():
     req_start = request.args.get('date_debut') or request.args.get('date_start')
     req_end = request.args.get('date_fin') or request.args.get('date_end')
 
-    active_imp = get_active_planning_import(db)
     p_start_d = parse_date(normalize_date(req_start)) if req_start else None
     p_end_d = parse_date(normalize_date(req_end)) if req_end else None
 
     if p_start_d and p_end_d and p_start_d > p_end_d:
         p_start_d, p_end_d = p_end_d, p_start_d
 
-    if not p_start_d and not p_end_d:
-        if active_imp['active']:
-            p_start_d = parse_date(active_imp['period_start'])
-            p_end_d = parse_date(active_imp['period_end'])
-        else:
-            today = datetime.date.today()
-            p_start_d = today - datetime.timedelta(days=today.weekday())
-            p_end_d = p_start_d + datetime.timedelta(days=6)
-    elif p_start_d and not p_end_d:
-        if active_imp['active'] and active_imp.get('period_end'):
-            imp_end = parse_date(active_imp['period_end'])
-            p_end_d = imp_end if (imp_end and imp_end >= p_start_d) else p_start_d + datetime.timedelta(days=6)
-        else:
-            p_end_d = p_start_d + datetime.timedelta(days=6)
+    # Si une seule date est spécifiée (ex: recherche ciblée sur le 19), filtrer sur ce jour précis
+    if p_start_d and not p_end_d:
+        p_end_d = p_start_d
     elif p_end_d and not p_start_d:
-        if active_imp['active'] and active_imp.get('period_start'):
-            imp_start = parse_date(active_imp['period_start'])
-            p_start_d = imp_start if (imp_start and imp_start <= p_end_d) else p_end_d - datetime.timedelta(days=6)
-        else:
-            p_start_d = p_end_d - datetime.timedelta(days=6)
+        p_start_d = p_end_d
 
     cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
     cours_in_period = []
     for c in cours_all:
         d = parse_date(c.date)
-        if d and p_start_d and p_end_d and p_start_d <= d <= p_end_d:
+        if not d:
+            continue
+        if p_start_d and p_end_d:
+            if p_start_d <= d <= p_end_d:
+                cours_in_period.append((d, c))
+        else:
+            # Aucun filtre de dates : Affiche TOUT ce qui est enregistré dans la base !
             cours_in_period.append((d, c))
 
     cours_in_period.sort(key=lambda x: (x[0], clean(x[1].hd)))
@@ -1600,10 +1720,18 @@ def get_attendance():
             "sessions": sess_list
         })
 
+    if cours_in_period:
+        all_dates = [x[0] for x in cours_in_period]
+        period_start_str = (p_start_d or min(all_dates)).strftime('%d/%m/%Y')
+        period_end_str = (p_end_d or max(all_dates)).strftime('%d/%m/%Y')
+    else:
+        period_start_str = p_start_d.strftime('%d/%m/%Y') if p_start_d else ''
+        period_end_str = p_end_d.strftime('%d/%m/%Y') if p_end_d else ''
+
     return jsonify({
         "period": {
-            "start": p_start_d.strftime('%d/%m/%Y') if p_start_d else '',
-            "end": p_end_d.strftime('%d/%m/%Y') if p_end_d else ''
+            "start": period_start_str,
+            "end": period_end_str
         },
         "total_professors": len(result_profs),
         "professors": result_profs
@@ -1627,40 +1755,31 @@ def export_journal():
     req_start = request.args.get('date_debut') or request.args.get('date_start')
     req_end = request.args.get('date_fin') or request.args.get('date_end')
 
-    active_imp = get_active_planning_import(db)
     p_start_d = parse_date(normalize_date(req_start)) if req_start else None
     p_end_d = parse_date(normalize_date(req_end)) if req_end else None
 
     if p_start_d and p_end_d and p_start_d > p_end_d:
         p_start_d, p_end_d = p_end_d, p_start_d
 
-    if not p_start_d and not p_end_d:
-        if active_imp['active']:
-            p_start_d = parse_date(active_imp['period_start'])
-            p_end_d = parse_date(active_imp['period_end'])
-        else:
-            today = datetime.date.today()
-            p_start_d = today - datetime.timedelta(days=today.weekday())
-            p_end_d = p_start_d + datetime.timedelta(days=6)
-    elif p_start_d and not p_end_d:
-        if active_imp['active'] and active_imp.get('period_end'):
-            imp_end = parse_date(active_imp['period_end'])
-            p_end_d = imp_end if (imp_end and imp_end >= p_start_d) else p_start_d + datetime.timedelta(days=6)
-        else:
-            p_end_d = p_start_d + datetime.timedelta(days=6)
+    # Si une seule date est spécifiée (ex: recherche sur le 19), filtrer sur ce jour précis
+    if p_start_d and not p_end_d:
+        p_end_d = p_start_d
     elif p_end_d and not p_start_d:
-        if active_imp['active'] and active_imp.get('period_start'):
-            imp_start = parse_date(active_imp['period_start'])
-            p_start_d = imp_start if (imp_start and imp_start <= p_end_d) else p_end_d - datetime.timedelta(days=6)
-        else:
-            p_start_d = p_end_d - datetime.timedelta(days=6)
+        p_start_d = p_end_d
 
     cours_all = db.query(Cours).filter(Cours.Cycle.in_(FI_CYCLES)).all()
     cours_in_period = []
     for c in cours_all:
         d = parse_date(c.date)
-        if d and p_start_d and p_end_d and p_start_d <= d <= p_end_d:
+        if not d:
+            continue
+        if p_start_d and p_end_d:
+            if p_start_d <= d <= p_end_d:
+                cours_in_period.append((d, c))
+        else:
+            # Aucun filtre de dates : exporte TOUTES les séances enregistrées dans la base
             cours_in_period.append((d, c))
+
     cours_in_period.sort(key=lambda x: (x[0], clean(x[1].hd)))
 
     absences = db.query(Absence).filter_by(actif=True).all()
@@ -2632,10 +2751,33 @@ def changement_salle(current_user):
 
 
 def _active_for_date(db, model):
-    """Nettoie les anciennes déclarations et retourne uniquement celles du jour (ou de la date demandée)."""
+    """Retourne les déclarations actives de la semaine courante (du lundi au dimanche).
+    Conserve toutes les alertes de la semaine dans la liste des déclarations,
+    et se réinitialise automatiquement au début de chaque nouvelle semaine (lundi)
+    pour afficher uniquement les alertes de la semaine actuelle.
+    """
     cleanup_expired_records(db)
-    target_date = normalize_date(request.args['date']) if request.args.get('date') else today_str()
-    return db.query(model).filter_by(actif=True, date=target_date).all()
+    req_date = request.args.get('date')
+    if req_date:
+        target_date = normalize_date(req_date)
+        return db.query(model).filter_by(actif=True, date=target_date).all()
+
+    today = datetime.date.today()
+    current_monday = today - datetime.timedelta(days=today.weekday())
+    current_sunday = current_monday + datetime.timedelta(days=6)
+
+    all_active = db.query(model).filter_by(actif=True).all()
+    week_alerts = []
+    for rec in all_active:
+        d_start = parse_date(rec.date)
+        d_end = parse_date(getattr(rec, 'date_fin', None)) or d_start
+        if not d_start:
+            continue
+        if d_start <= current_sunday and d_end >= current_monday:
+            week_alerts.append(rec)
+
+    week_alerts.sort(key=lambda x: (parse_date(x.date) or today, clean(getattr(x, 'prof', '')) or clean(getattr(x, 'groupe', ''))))
+    return week_alerts
 
 
 @app.route('/api/absences', methods=['GET'])

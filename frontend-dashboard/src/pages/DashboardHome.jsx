@@ -214,7 +214,7 @@ const DashboardHome = () => {
     try {
       setBackupActionLoading(true);
       const res = await apiClient.post('/dashboard/backups/create-db-backup');
-      showNotification(`Sauvegarde instantanée de la base créée : ${res.data.filename}`, 'success');
+      showNotification(`Sauvegarde Excel complète créée avec succès : ${res.data.filename}`, 'success');
       fetchBackups();
     } catch (err) {
       console.error('Erreur création sauvegarde BDD:', err);
@@ -894,10 +894,10 @@ const DashboardHome = () => {
                         className="btn btn-outline-primary btn-sm d-flex align-items-center gap-1"
                         onClick={handleCreateDbBackup}
                         disabled={backupActionLoading}
-                        title="Créer immédiatement un instantané complet de la base SQLite avec rétention de 3 mois"
+                        title="Créer immédiatement une sauvegarde complète au format Excel multi-feuilles (.xlsx) avec rétention de 3 mois"
                       >
-                        <span>💾</span>
-                        <span>Sauvegarder BDD</span>
+                        <span>📊</span>
+                        <span>Sauvegarder en Excel (.xlsx)</span>
                       </button>
                       <button
                         className="btn btn-outline-warning btn-sm d-flex align-items-center gap-1"
@@ -957,8 +957,8 @@ const DashboardHome = () => {
                               catBadge = { label: 'Relations Entr.', bg: 'bg-success' };
                             } else if (b.category === 'event_media' || b.category === 'events') {
                               catBadge = { label: 'Affiche Événement', bg: 'bg-warning text-dark' };
-                            } else if (b.category === 'database') {
-                              catBadge = { label: 'Base SQLite', bg: 'bg-dark' };
+                            } else if (b.category === 'database' || b.category === 'excel_backup') {
+                              catBadge = { label: '📊 Sauvegarde Excel', bg: 'bg-success' };
                             } else if (b.category === 'absences') {
                               catBadge = { label: 'Absences', bg: 'bg-info text-dark' };
                             }
@@ -1330,8 +1330,8 @@ const DashboardHome = () => {
                     <div className="card-body">
                       <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
                         <div>
-                          <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>Alertes & Déclarations en cours d'affichage</h5>
-                          <small className="text-muted">Uniquement les déclarations du jour ({new Date().toLocaleDateString('fr-FR')})</small>
+                          <h5 className="fw-bold m-0" style={{ color: '#0B4F6C' }}>Alertes & Déclarations de la Semaine</h5>
+                          <small className="text-muted">Conserve toutes les alertes de la semaine en cours (se réinitialise automatiquement chaque lundi)</small>
                         </div>
                         <button type="button" className="btn btn-sm btn-outline-secondary" onClick={fetchAlertes}>
                           🔄 Rafraîchir

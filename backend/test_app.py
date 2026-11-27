@@ -159,7 +159,8 @@ def test_cleanup_expired_events_and_same_day_alerts(client):
     today_s = today.strftime('%d/%m/%Y')
     old_event_s = (today - datetime.timedelta(days=15)).strftime('%d/%m/%Y')
     recent_event_s = (today - datetime.timedelta(days=5)).strftime('%d/%m/%Y')
-    yesterday_s = (today - datetime.timedelta(days=1)).strftime('%d/%m/%Y')
+    # Alerte d'une semaine antérieure (10 jours passés) : ne doit plus être dans la semaine actuelle
+    prev_week_s = (today - datetime.timedelta(days=10)).strftime('%d/%m/%Y')
     tomorrow_s = (today + datetime.timedelta(days=1)).strftime('%d/%m/%Y')
 
     db = SessionLocal()
@@ -167,14 +168,15 @@ def test_cleanup_expired_events_and_same_day_alerts(client):
     try:
         ev_old = Event(titre="__TEST_OLD_EVENT__", date=old_event_s, heure_debut="10:00", lieu="Hall")
         ev_recent = Event(titre="__TEST_RECENT_EVENT__", date=recent_event_s, heure_debut="10:00", lieu="Hall")
-        abs_old = Absence(prof="__TEST_OLD_ABS__", groupe="G1", date=yesterday_s, heure="08:30", motif="Old")
+        abs_old = Absence(prof="__TEST_OLD_ABS__", groupe="G1", date=prev_week_s, heure="08:30", motif="Old")
         abs_today = Absence(prof="__TEST_TODAY_ABS__", groupe="G1", date=today_s, heure="08:30", motif="Today")
-        ret_old = Retard(prof="__TEST_OLD_RET__", groupe="G1", date=yesterday_s, heure_prevue="09:00", duree_retard="10m")
-        sal_old = ChangementSalle(groupe="__TEST_OLD_SALLE__", ancienne_salle="A1", nouvelle_salle="A2", date=yesterday_s, heure_creation="08:00")
-        sal_future = ChangementSalle(groupe="__TEST_FUT_SALLE__", ancienne_salle="A1", nouvelle_salle="A3", date=tomorrow_s, heure_creation="08:00")
-        db.add_all([ev_old, ev_recent, abs_old, abs_today, ret_old, sal_old, sal_future])
+        ret_old = Retard(prof="__TEST_OLD_RET__", groupe="G1", date=prev_week_s, heure_prevue="09:00", duree_retard="10m")
+        ret_today = Retard(prof="__TEST_TODAY_RET__", groupe="G1", date=today_s, heure_prevue="09:00", duree_retard="10m")
+        sal_old = ChangementSalle(groupe="__TEST_OLD_SALLE__", ancienne_salle="A1", nouvelle_salle="A2", date=prev_week_s, heure_creation="08:00")
+        sal_today = ChangementSalle(groupe="__TEST_TODAY_SALLE__", ancienne_salle="A1", nouvelle_salle="A3", date=today_s, heure_creation="08:00")
+        db.add_all([ev_old, ev_recent, abs_old, abs_today, ret_old, ret_today, sal_old, sal_today])
         db.commit()
-        created_ids = [ev_old.id, ev_recent.id, abs_old.id, abs_today.id, ret_old.id, sal_old.id, sal_future.id]
+        created_ids = [ev_old.id, ev_recent.id, abs_old.id, abs_today.id, ret_old.id, ret_today.id, sal_old.id, sal_today.id]
 
         # /api/events supprime les événements > 14 jours mais garde ceux < 14 jours
         ev_res = client.get('/api/events')
@@ -184,25 +186,25 @@ def test_cleanup_expired_events_and_same_day_alerts(client):
         assert "__TEST_RECENT_EVENT__" in titres
         assert db.query(Event).filter_by(id=created_ids[0]).first() is None
 
-        # /api/absences, /api/retards, /api/changements-salle suppriment < aujourd'hui et n'affichent que aujourd'hui
+        # /api/absences, /api/retards, /api/changements-salle affichent les alertes de la semaine en cours
+        # et réinitialisent la liste chaque lundi (les alertes de la semaine passée n'apparaissent pas)
         abs_res = client.get('/api/absences')
         assert abs_res.status_code == 200
         profs = [a['prof'] for a in abs_res.get_json()]
         assert "__TEST_OLD_ABS__" not in profs
         assert "__TEST_TODAY_ABS__" in profs
-        assert db.query(Absence).filter_by(id=created_ids[2]).first() is None
 
         ret_res = client.get('/api/retards')
         assert ret_res.status_code == 200
-        assert "__TEST_OLD_RET__" not in [r['prof'] for r in ret_res.get_json()]
-        assert db.query(Retard).filter_by(id=created_ids[4]).first() is None
+        ret_profs = [r['prof'] for r in ret_res.get_json()]
+        assert "__TEST_OLD_RET__" not in ret_profs
+        assert "__TEST_TODAY_RET__" in ret_profs
 
         sal_res = client.get('/api/changements-salle')
         assert sal_res.status_code == 200
         groupes_salle = [s['groupe'] for s in sal_res.get_json()]
         assert "__TEST_OLD_SALLE__" not in groupes_salle
-        assert "__TEST_FUT_SALLE__" not in groupes_salle  # même jour uniquement
-        assert db.query(ChangementSalle).filter_by(id=created_ids[5]).first() is None
+        assert "__TEST_TODAY_SALLE__" in groupes_salle
     finally:
         for model in (Event, Absence, Retard, ChangementSalle):
             for obj in db.query(model).all():
@@ -771,6 +773,10 @@ def test_backup_retention_and_purge(client):
         snap_file = os.path.join(BACKUP_DIR, snap_data['filename'])
         assert os.path.exists(snap_file)
         created_files.append(snap_file)
+        assert snap_data['filename'].endswith('.xlsx')
+        wb_check = openpyxl.load_workbook(snap_file)
+        assert "Cours_FI" in wb_check.sheetnames
+        assert "Absences" in wb_check.sheetnames
 
         # 5. Simulation d'un fichier expiré (> 3 mois / 90 jours) pour vérifier l'écrasement / suppression
         expired_filename = "planning_fi_expired_test_file.xlsx"
@@ -1094,7 +1100,24 @@ def test_planning_history_retention_and_past_month_attendance(client):
         assert prof_past['sessions'][0]['date'] == date_semaine1
         assert prof_past['presents'] == 1
 
-        # 2. Recherche sur un mois complet couvrant les deux semaines
+        # 2. Recherche ciblée sur un jour précis passé (ex: le 3 novembre sans date_fin)
+        res_single = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-03')
+        assert res_single.status_code == 200
+        s_data = res_single.get_json()
+        assert s_data['total_professors'] == 1
+        prof_single = s_data['professors'][0]
+        assert prof_single['total_sessions'] == 1
+        assert prof_single['sessions'][0]['date'] == date_semaine1
+
+        # 3. Recherche globale sans filtre de date : retourne TOUT ce qui est enregistré dans la base
+        res_all = client.get(f'/api/dashboard/attendance?prof={test_prof}')
+        assert res_all.status_code == 200
+        all_data = res_all.get_json()
+        assert all_data['total_professors'] == 1
+        prof_all = all_data['professors'][0]
+        assert prof_all['total_sessions'] == 2
+
+        # 4. Recherche sur un mois complet couvrant les deux semaines
         res_month = client.get(f'/api/dashboard/attendance?prof={test_prof}&date_debut=2026-11-01&date_fin=2026-11-30')
         assert res_month.status_code == 200
         m_data = res_month.get_json()
